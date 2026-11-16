@@ -1,0 +1,23 @@
+{
+  "imagePath": "image-targets/custom_luminance.jpg",
+  "metadata": null,
+  "name": "custom",
+  "type": "PLANAR",
+  "properties": {
+    "left": 0,
+    "top": 40,
+    "width": 1287,
+    "height": 1716,
+    "isRotated": false,
+    "originalWidth": 1287,
+    "originalHeight": 1795
+  },
+  "resources": {
+    "originalImage": "custom_original.jpg",
+    "croppedImage": "custom_cropped.jpg",
+    "thumbnailImage": "custom_thumbnail.jpg",
+    "luminanceImage": "custom_luminance.jpg"
+  },
+  "created": 1794836263902,
+  "updated": 1794836263902
+}

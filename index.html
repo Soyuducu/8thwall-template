@@ -1,54 +1,37 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-  <title>WebAR Image Tracking</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Image Tracking</title>
   <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-      background: #000;
-    }
-
-    #canvas {
-      position: fixed;
-      inset: 0;
-      display: block;
-      width: 100vw;
-      height: 100dvh;
-    }
-
-    #status {
-      position: fixed;
-      top: calc(env(safe-area-inset-top) + 16px);
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 1;
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
-      font-family: sans-serif;
-      font-size: 14px;
-      padding: 8px 16px;
-      border-radius: 20px;
-      pointer-events: none;
-    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
+    #canvas { position: fixed; inset: 0; display: block; width: 100vw; height: 100dvh; }
+    #loading { position: fixed; top: calc(env(safe-area-inset-top) + 16px); left: 50%;
+      transform: translateX(-50%); max-width: calc(100% - 32px); z-index: 2;
+      display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+      color: white; background: rgba(0,0,0,.72); border-radius: 12px;
+      font: 14px/1.45 system-ui, sans-serif; overflow-wrap: anywhere; }
+    #loading[hidden] { display: none; }
+    #spinner { display: none; flex: 0 0 20px; width: 20px; height: 20px;
+      border: 2px solid rgba(255,255,255,.25); border-top-color: white;
+      border-radius: 50%; animation: spin .8s linear infinite; }
+    #loading.busy #spinner { display: block; }
+    #loading.error { background: rgba(110,20,20,.95); }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div id="status">Starting AR...</div>
-
-  <!-- "slam" is the compatibility name that loads the local xr-tracking.js chunk. -->
+  <div id="loading" class="busy" role="status" aria-live="polite">
+    <span id="spinner" aria-hidden="true"></span><span id="status">Загрузка движка…</span>
+  </div>
+  <!-- Оригинальные файлы движка сохраняются в external/xr/. -->
   <script src="external/xr/xr.js" async data-preload-chunks="slam"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
