@@ -6,10 +6,15 @@
   const status = document.getElementById('status')
   const startButton = document.getElementById('start-ar')
   const resumeButton = document.getElementById('resume-audio')
+  const debug = new URL(location.href).searchParams.get('debug') === '1'
+  const debugPanel = document.getElementById('playback-debug')
   const states = new Map()
-  let config, scene, clock, selected = null, foundSequence = 0, fatal = false
+  let config, scene, selected = null, foundSequence = 0, fatal = false
   let started = false
-  let audioContext = null
+  let animationFrame = null
+  let previousFrameTime = null
+  let frameCount = 0
+  let lastDebugUpdate = -Infinity
 
   function message(text, busy = false, error = false) {
     if (fatal) return
@@ -21,7 +26,7 @@
 
   function fail(error) {
     console.error(error)
-    for (const state of states.values()) stopSound(state)
+    stopPlayback()
     if (resumeButton) resumeButton.hidden = true
     message('Ошибка: ' + (error?.message || String(error)), false, true)
     fatal = true
@@ -168,149 +173,163 @@
     return state.tracked && (config.displayMode === 'multiple' || selected === state)
   }
 
-  async function resumeAudio(context) {
-    let timeout
-    try {
-      await Promise.race([
-        context.resume(),
-        new Promise((_, reject) => {
-          timeout = setTimeout(() => reject(new Error('Браузер не разрешил звук')), 3000)
-        }),
-      ])
-      if (context.state !== 'running') throw new Error('Звук приостановлен браузером')
-    } finally {
-      clearTimeout(timeout)
-    }
-  }
-
   function refreshAudioButton() {
     if (!resumeButton) return
-    const hasSound = [...states.values()].some(state =>
-      state.anchor?.visible && state.action && state.sound?.buffer
+    resumeButton.hidden = fatal || document.hidden || ![...states.values()].some(state =>
+      state.anchor?.visible && state.action && state.sound?.status === 'blocked'
     )
-    resumeButton.hidden = fatal || document.hidden || !audioContext || !hasSound ||
-      audioContext.state === 'running' || audioContext.state === 'closed'
+  }
+
+  function startButtonPress() {
+    message('')
+    startButton.hidden = false
+    return new Promise(resolve => {
+      startButton.addEventListener('click', () => {
+        startButton.hidden = true
+        resolve()
+      }, {once: true})
+    })
+  }
+
+  function loadSound(state) {
+    const settings = state.item.animation
+    const {url, volume} = settings.audio
+    const element = new Audio()
+    element.preload = 'auto'
+    element.volume = volume
+    const sound = {element, status: 'ready', needsStart: true, request: null, finished: false}
+    state.sound = sound
+    element.addEventListener('error', () => {
+      stopSound(state)
+      sound.status = 'error'
+      sound.error = element.error?.message || 'Код ' + element.error?.code
+      console.warn('Не удалось загрузить звук:', url, element.error)
+      refreshAudioButton()
+    })
+    element.addEventListener('ended', () => {
+      if (sound.status === 'playing') sound.status = 'ended'
+    })
+    element.addEventListener('pause', () => {
+      if (!element.paused || element.ended || sound.status !== 'playing') return
+      sound.status = 'blocked'
+      sound.error = 'Браузер остановил воспроизведение'
+      refreshAudioButton()
+    })
+    element.src = new URL(url, document.baseURI).href
+  }
+
+  function stopSound(state) {
+    const sound = state.sound
+    if (!sound) return
+    if (sound.request) clearTimeout(sound.request.timeout)
+    sound.request = null
+    if (['playing', 'starting', 'ended'].includes(sound.status)) sound.status = 'ready'
+    if (!sound.element.paused) sound.element.pause()
+    sound.needsStart = true
   }
 
   function restartAnimation(state) {
     stopSound(state)
     if (state.sound) state.sound.finished = false
     state.action.reset().play()
+    state.mixer.update(0)
   }
 
-  function startButtonPress(Context) {
-    message('')
-    startButton.hidden = false
-    return new Promise(resolve => {
-      startButton.addEventListener('click', async () => {
-        startButton.hidden = true
-        try {
-          audioContext = new Context()
-          audioContext.addEventListener('statechange', () => {
-            if (audioContext.state !== 'running') {
-              for (const state of states.values()) stopSound(state)
-            }
-            refreshAudioButton()
-          })
-          await resumeAudio(audioContext)
-        } catch (error) {
-          console.warn('Не удалось включить звук:', error)
-        } finally {
-          resolve()
-        }
-      }, {once: true})
-    })
-  }
-
-  async function loadSound(sound, url) {
-    const controller = new AbortController()
-    let timeout
-    try {
-      const decode = async () => {
-        const response = await fetch(new URL(url, document.baseURI), {signal: controller.signal})
-        if (!response.ok) throw new Error('HTTP ' + response.status)
-        return audioContext.decodeAudioData(await response.arrayBuffer())
-      }
-      sound.buffer = await Promise.race([
-        decode(),
-        new Promise((_, reject) => {
-          timeout = setTimeout(() => {
-            controller.abort()
-            reject(new Error('Истекло время загрузки звука'))
-          }, 12000)
-        }),
-      ])
-    } catch (error) {
-      console.warn('Не удалось загрузить звук ' + url, error)
-    } finally {
-      clearTimeout(timeout)
-      sound.loading = false
-    }
-  }
-
-  function stopSound(state) {
+  function playSound(state) {
     const sound = state.sound
-    if (!sound) return
-    if (sound.source) {
-      sound.source.stop()
-      sound.source.disconnect()
-      sound.source = null
-    }
-    sound.lastTime = null
-  }
-
-  function playSound(state, when) {
-    const sound = state.sound
+    const element = sound.element
     const offset = state.action.time
-    const end = Math.min(sound.buffer.duration, state.action.getClip().duration)
-    if (offset >= end) return
-    const source = audioContext.createBufferSource()
-    source.buffer = sound.buffer
-    source.playbackRate.value = state.item.animation.speed
-    source.connect(sound.gain)
-    source.onended = () => {
-      if (sound.source === source) sound.source = null
-      source.disconnect()
+    sound.needsStart = false
+    if (Number.isFinite(element.duration) && offset >= element.duration) return
+    const request = {}
+    sound.request = request
+    sound.status = 'starting'
+
+    const failure = error => {
+      if (sound.request !== request) return
+      stopSound(state)
+      sound.needsStart = false
+      sound.status = ['NotAllowedError', 'TimeoutError'].includes(error.name) ? 'blocked' : 'error'
+      sound.error = error.name + (error.message ? ': ' + error.message : '')
+      console.warn('Не удалось запустить звук:', state.item.label, error)
+      refreshAudioButton()
     }
-    source.start(when, offset, end - offset)
-    sound.source = source
+
+    try {
+      element.playbackRate = state.item.animation.speed
+      element.currentTime = offset
+      request.timeout = setTimeout(() => failure({
+        name: 'TimeoutError', message: 'Запуск звука не подтверждён',
+      }), 2500)
+      // A manual retry calls play() directly from the trusted click handler.
+      Promise.resolve(element.play()).then(() => {
+        if (sound.request !== request) return
+        clearTimeout(request.timeout)
+        sound.request = null
+        sound.status = 'playing'
+        sound.error = ''
+        // Re-align if the browser spent time buffering the start.
+        state.action.time = element.currentTime
+        state.mixer.update(0)
+        refreshAudioButton()
+      }, failure)
+    } catch (error) {
+      failure(error)
+    }
   }
 
   function updateAnimation(state, delta) {
+    // The mixer always advances on the browser frame clock.
     const sound = state.sound
-    if (!sound) {
-      state.mixer.update(delta)
-      return
-    }
-    if (audioContext.state !== 'running') {
-      stopSound(state)
-      state.mixer.update(delta)
-      return
-    }
-    if (sound.loading) {
+    if (sound?.needsStart && !sound.finished && sound.status === 'ready') {
       state.mixer.update(0)
+      playSound(state)
       return
     }
-    if (!sound.buffer) {
-      state.mixer.update(delta)
-      return
-    }
-    if (sound.finished) return
+    state.mixer.update(delta)
+  }
 
-    // Use the audio clock so the animation does not lag behind on slow frames.
-    const now = audioContext.currentTime
-    if (sound.lastTime === null) {
-      state.mixer.update(0)
-      playSound(state, now)
-    } else {
-      sound.looped = false
-      state.mixer.update(now - sound.lastTime)
-      if (sound.finished || sound.looped) {
-        stopSound(state)
-        if (!sound.finished) playSound(state, now)
+  function updateDebug(timestamp) {
+    if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
+    lastDebugUpdate = timestamp
+    debugPanel.hidden = false
+    const lines = ['AR v6 · кадр ' + frameCount]
+    for (const state of states.values()) {
+      if (!state.tracked && !state.content) continue
+      const clip = state.action?.getClip()
+      lines.push(state.name + (state.anchor?.visible ? ' · виден' : ' · вне кадра'))
+      lines.push(clip ? clip.name + ': ' + state.action.time.toFixed(2) + ' / ' +
+        clip.duration.toFixed(2) + ' с' : state.error || (state.content ? 'Без анимации' : 'Загрузка модели'))
+      if (state.sound) {
+        const {element, status, error} = state.sound
+        lines.push('Звук: ' + status + ' · ' + element.currentTime.toFixed(2) + ' с' +
+          (error ? ' · ' + error : ''))
       }
     }
-    sound.lastTime = now
+    debugPanel.textContent = lines.join('\n')
+  }
+
+  function animate(timestamp) {
+    if (fatal) return
+    animationFrame = window.requestAnimationFrame(animate)
+    if (document.hidden) {
+      previousFrameTime = null
+      return
+    }
+    const delta = previousFrameTime == null ? 0 : (timestamp - previousFrameTime) / 1000
+    previousFrameTime = timestamp
+    frameCount++
+    for (const state of states.values()) {
+      if (state.anchor?.visible && state.mixer) updateAnimation(state, delta)
+    }
+    updateDebug(timestamp)
+  }
+
+  function stopPlayback() {
+    if (animationFrame !== null) window.cancelAnimationFrame(animationFrame)
+    animationFrame = null
+    previousFrameTime = null
+    for (const state of states.values()) stopSound(state)
   }
 
   function refresh() {
@@ -324,8 +343,6 @@
     refreshAudioButton()
     const pending = active.filter(state => state.promise && !state.content && !state.error)
     if (pending.length) message('Загрузка: ' + pending.map(s => s.item.label).join(', ') + '…', true)
-    else if (audioContext?.state === 'running' &&
-      active.some(state => state.action && state.sound?.loading)) message('Загрузка звука…', true)
     else if (active.some(state => state.content)) message('')
     else if (active.some(state => state.error)) {
       const state = active.find(s => s.error)
@@ -404,8 +421,11 @@
         state.action.clampWhenFinished = !settings.loop
         state.action.play()
         if (state.sound) {
-          state.mixer.addEventListener('loop', () => { state.sound.looped = true })
-          state.mixer.addEventListener('finished', () => { state.sound.finished = true })
+          state.mixer.addEventListener('loop', () => stopSound(state))
+          state.mixer.addEventListener('finished', () => {
+            state.sound.finished = true
+            stopSound(state)
+          })
         }
       }
     }
@@ -509,20 +529,9 @@
         const {enabled, speed, audio} = item.animation
         return enabled && speed > 0 && audio?.volume > 0
       })
-      const Context = window.AudioContext || window.webkitAudioContext
-      if (sounding.length && Context && startButton) {
-        await startButtonPress(Context)
-        if (audioContext) {
-          for (const state of sounding) {
-            const {url, volume} = state.item.animation.audio
-            const gain = audioContext.createGain()
-            gain.gain.value = volume
-            gain.connect(audioContext.destination)
-            state.sound = {gain, loading: true, buffer: null, source: null, lastTime: null,
-              finished: false, looped: false}
-            loadSound(state.sound, url).finally(refresh)
-          }
-        }
+      if (sounding.length && typeof Audio === 'function') {
+        for (const state of sounding) loadSound(state)
+        if (startButton) await startButtonPress()
       }
       if (config.preloadModels) {
         message('Загрузка моделей…', true)
@@ -565,19 +574,10 @@
               scene.add(state.anchor)
               applyPose(state)
             }
-            clock = new THREE.Clock()
             refresh()
+            if (animationFrame === null) animationFrame = window.requestAnimationFrame(animate)
           },
-          onUpdate() {
-            const delta = clock ? Math.min(clock.getDelta(), 0.1) : 0
-            if (document.hidden) return
-            for (const state of states.values()) {
-              if (state.anchor?.visible && state.mixer) updateAnimation(state, delta)
-            }
-          },
-          onDetach() {
-            for (const state of states.values()) stopSound(state)
-          },
+          onDetach: stopPlayback,
           onCameraStatusChange({status: cameraStatus, reason}) {
             if (cameraStatus === 'requesting') message('Разрешите доступ к камере…', true)
             if (cameraStatus === 'hasVideo') message('Подготовка отслеживания…', true)
@@ -601,25 +601,19 @@
   }
 
   document.addEventListener('visibilitychange', () => {
+    previousFrameTime = null
     if (document.hidden) {
       for (const state of states.values()) stopSound(state)
     }
     refreshAudioButton()
   })
-  resumeButton?.addEventListener('click', async () => {
-    resumeButton.disabled = true
-    try {
-      await resumeAudio(audioContext)
-      for (const state of states.values()) {
-        if (state.anchor?.visible && state.action && state.sound?.buffer) restartAnimation(state)
-      }
-    } catch (error) {
-      console.warn('Не удалось возобновить звук:', error)
-      resumeButton.textContent = 'Повторить включение звука'
-    } finally {
-      resumeButton.disabled = false
-      refreshAudioButton()
+  resumeButton?.addEventListener('click', () => {
+    for (const state of states.values()) {
+      if (!state.anchor?.visible || !state.action || state.sound?.status !== 'blocked') continue
+      restartAnimation(state)
+      playSound(state)
     }
+    refreshAudioButton()
   })
   document.getElementById('xr-engine')?.addEventListener('error', () => fail(new Error('Не загрузился external/xr/xr.js')))
   if (window.XR8) start()

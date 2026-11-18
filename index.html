@@ -28,11 +28,16 @@
       min-height: 48px; padding: 12px 18px; border: 0; border-radius: 12px;
       background: #fff; color: #151515; font: 600 16px system-ui, sans-serif;
       white-space: nowrap; cursor: pointer; }
+    #playback-debug { position: fixed; z-index: 4; left: 8px; top: 72px;
+      max-width: calc(100% - 16px); margin: 0; padding: 8px 10px;
+      background: #000c; color: #fff; border-radius: 8px; pointer-events: none;
+      white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 monospace; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
+  <pre id="playback-debug" hidden></pre>
   <button id="start-ar" type="button" hidden>Начать AR</button>
   <button id="resume-audio" type="button" hidden>Включить звук</button>
   <div id="loading" class="busy" role="status" aria-live="polite">
@@ -43,6 +48,6 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/app.js?v=6"></script>
 </body>
 </html>
