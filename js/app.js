@@ -138,6 +138,15 @@
         if (floor > 1) throw new Error(key + ': максимум 1')
         return [name, floor]
       }))
+      const keyLabel = label + '.markerKey'
+      const key = item.markerKey == null ? null : object(item.markerKey, keyLabel)
+      const markerKey = key && {
+        intensity: finite(key.intensity, 0, keyLabel + '.intensity', 0),
+        direction: vector(key.direction, {x: 0, y: -0.75, z: 1}, keyLabel + '.direction'),
+      }
+      if (markerKey?.intensity && !Object.values(markerKey.direction).some(Boolean)) {
+        throw new Error(keyLabel + '.direction: требуется ненулевое направление')
+      }
       return [{
         label: item.label === undefined ? 'Модель ' + (index + 1) : text(item.label, label + '.label'),
         targetJson: text(item.targetJson, label + '.targetJson'),
@@ -146,6 +155,7 @@
         offset: vector(item.offset, {x: 0, y: 0, z: 0}, label + '.offset'),
         roughnessFloor,
         diffuseFill: finite(item.diffuseFill, 0, label + '.diffuseFill', 0),
+        markerKey,
         animation: {
           enabled: boolean(animation.enabled, true, label + '.animation.enabled'), clip,
           speed: finite(animation.speed, 1, label + '.animation.speed', 0),
@@ -383,7 +393,7 @@
     if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
     lastDebugUpdate = timestamp
     debugPanel.hidden = false
-    const lines = ['AR v10 · кадр ' + frameCount]
+    const lines = ['AR v11 · кадр ' + frameCount]
     for (const state of states.values()) {
       if (!state.tracked && !state.content) continue
       const clip = state.action?.getClip()
@@ -459,6 +469,9 @@
     state.anchor.position.copy(pose.position)
     state.anchor.quaternion.copy(pose.rotation)
     state.anchor.scale.setScalar(pose.scale ?? 1)
+    if (state.markerKeyWorld) {
+      state.markerKeyWorld.copy(state.markerKeyLocal).applyQuaternion(state.anchor.quaternion)
+    }
     if (state.content) {
       state.content.scale.setScalar(shorter * state.item.size)
       const offset = state.item.offset
@@ -493,21 +506,30 @@
     return bounds
   }
 
-  function applyMaterialSettings(root, {roughnessFloor, diffuseFill}) {
-    if (!roughnessFloor.size && !diffuseFill) return
+  function applyMaterialSettings(root, state) {
+    const {roughnessFloor, diffuseFill, markerKey} = state.item
+    const keyIntensity = markerKey?.intensity ?? 0
+    if (!roughnessFloor.size && !diffuseFill && !keyIntensity) return
+    const keyDirection = state.markerKeyWorld ?? new THREE.Vector3(0, 0, 1)
     root.traverse(mesh => {
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       for (const material of materials) {
         if (!material?.isMeshStandardMaterial) continue
         const floor = roughnessFloor.get(material.name) || 0
-        if (!floor && !diffuseFill) continue
+        if (!floor && !diffuseFill && !keyIntensity) continue
 
         material.onBeforeCompile = shader => {
           shader.uniforms.arRoughnessFloor = {value: floor}
           shader.uniforms.arDiffuseFill = {value: diffuseFill}
+          shader.uniforms.arMarkerKeyIntensity = {value: keyIntensity}
+          shader.uniforms.arMarkerKeyDirection = {value: keyDirection}
           shader.fragmentShader = shader.fragmentShader.replace(
             '#include <common>',
-            '#include <common>\nuniform float arRoughnessFloor;\nuniform float arDiffuseFill;'
+            '#include <common>\n' +
+            'uniform float arRoughnessFloor;\n' +
+            'uniform float arDiffuseFill;\n' +
+            'uniform float arMarkerKeyIntensity;\n' +
+            'uniform vec3 arMarkerKeyDirection;'
           ).replace(
             '#include <roughnessmap_fragment>',
             '#include <roughnessmap_fragment>\n' +
@@ -516,7 +538,11 @@
             '#include <lights_fragment_begin>',
             '#include <lights_fragment_begin>\n' +
             '#if defined( RE_IndirectDiffuse )\n' +
-            'irradiance += getAmbientLightIrradiance( vec3( arDiffuseFill ) );\n#endif'
+            'irradiance += getAmbientLightIrradiance( vec3( arDiffuseFill ) );\n' +
+            // Soften the light's falloff on the sides and leave specular response unchanged.
+            'vec3 arViewKey = transformDirection( arMarkerKeyDirection, viewMatrix );\n' +
+            'float arKeyDiffuse = smoothstep( -0.15, 1.0, dot( normal, arViewKey ) );\n' +
+            'irradiance += getAmbientLightIrradiance( vec3( arMarkerKeyIntensity * arKeyDiffuse ) );\n#endif'
           )
         }
       }
@@ -524,7 +550,12 @@
   }
 
   function prepareModel(gltf, state) {
-    applyMaterialSettings(gltf.scene, state.item)
+    if (state.item.markerKey?.intensity) {
+      const {x, y, z} = state.item.markerKey.direction
+      state.markerKeyLocal = new THREE.Vector3(x, y, z).normalize()
+      state.markerKeyWorld = state.markerKeyLocal.clone()
+    }
+    applyMaterialSettings(gltf.scene, state)
     const orientation = new THREE.Group()
     const r = state.item.rotationDegrees
     orientation.rotation.set(...['x', 'y', 'z'].map(axis => THREE.MathUtils.degToRad(r[axis])))
