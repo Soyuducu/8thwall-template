@@ -74,6 +74,37 @@
     return value
   }
 
+  function audioSettings(value, label) {
+    if (value == null) return null
+    const audio = object(value, label)
+    const volume = finite(audio.volume, 1, label + '.volume', 0)
+    if (volume > 1) throw new Error(label + '.volume: максимум 1')
+    return {url: text(audio.url, label + '.url'), volume}
+  }
+
+  function animationClip(value, label) {
+    if ((typeof value === 'string' && value.length) || (Number.isInteger(value) && value >= 0)) return value
+    throw new Error(label + ': требуется номер с нуля или имя анимации')
+  }
+
+  function animationSequence(values, label) {
+    if (values === undefined) return null
+    if (!Array.isArray(values) || !values.length) throw new Error(label + ': требуется непустой список')
+    return values.map((value, index) => {
+      const key = label + '[' + index + ']'
+      const step = object(value, key)
+      const speed = finite(step.speed, 1, key + '.speed', 0)
+      const exitTime = finite(step.exitTime, 1, key + '.exitTime', 0)
+      if (!speed) throw new Error(key + '.speed: требуется число больше нуля')
+      if (!exitTime || exitTime > 1) throw new Error(key + '.exitTime: требуется число больше 0, до 1 включительно')
+      return {
+        clip: animationClip(step.clip, key + '.clip'), speed, exitTime,
+        blend: finite(step.blend, 0, key + '.blend', 0),
+        audio: step.audio === undefined ? undefined : audioSettings(step.audio, key + '.audio'),
+      }
+    })
+  }
+
   function validate(raw) {
     object(raw, CONFIG_URL)
     if (raw.version !== 2) throw new Error('ar-config.json: требуется "version": 2')
@@ -85,13 +116,8 @@
       const item = object(value, label)
       if (!boolean(item.enabled, true, label + '.enabled')) return []
       const animation = object(item.animation ?? {}, label + '.animation')
-      const audio = animation.audio == null ? null : object(animation.audio, label + '.animation.audio')
-      const volume = audio ? finite(audio.volume, 1, label + '.animation.audio.volume', 0) : 0
-      if (volume > 1) throw new Error(label + '.animation.audio.volume: максимум 1')
-      const clip = animation.clip ?? 0
-      if (!(typeof clip === 'string' && clip.length) && !(Number.isInteger(clip) && clip >= 0)) {
-        throw new Error(label + '.animation.clip: требуется номер с нуля или имя анимации')
-      }
+      const animationKey = label + '.animation'
+      const clip = animationClip(animation.clip ?? 0, animationKey + '.clip')
       const size = finite(item.size, 0.65, label + '.size', 0)
       if (!size) throw new Error(label + '.size должен быть больше нуля')
       const roughnessFloor = new Map(Object.entries(
@@ -114,7 +140,8 @@
           speed: finite(animation.speed, 1, label + '.animation.speed', 0),
           loop: boolean(animation.loop, true, label + '.animation.loop'),
           restartOnFound: boolean(animation.restartOnFound, false, label + '.animation.restartOnFound'),
-          audio: audio && {url: text(audio.url, label + '.animation.audio.url'), volume},
+          audio: audioSettings(animation.audio, animationKey + '.audio'),
+          sequence: animationSequence(animation.sequence, animationKey + '.sequence'),
         },
       }]
     })
@@ -200,23 +227,21 @@
     })
   }
 
-  function loadSound(state) {
-    const settings = state.item.animation
-    const {url, volume} = settings.audio
+  function loadSound(state, audio) {
     const element = new Audio()
     element.preload = 'auto'
-    element.volume = volume
-    const sound = {element, status: 'ready', needsStart: true, request: null, finished: false}
+    const sound = {element, track: null, status: 'silent', needsStart: false, request: null, finished: false}
     state.sound = sound
     element.addEventListener('error', () => {
+      if (!sound.track || !element.error) return
       stopSound(state)
       sound.status = 'error'
-      sound.error = element.error?.message || 'Код ' + element.error?.code
-      console.warn('Не удалось загрузить звук:', url, element.error)
+      sound.error = element.error.message || 'Код ' + element.error.code
+      console.warn('Не удалось загрузить звук:', sound.track.url, element.error)
       refreshAudioButton()
     })
     element.addEventListener('ended', () => {
-      if (sound.status === 'playing') sound.status = 'ended'
+      if (element.ended && sound.status === 'playing') sound.status = 'ended'
     })
     element.addEventListener('pause', () => {
       if (!element.paused || element.ended || sound.status !== 'playing') return
@@ -224,7 +249,26 @@
       sound.error = 'Браузер остановил воспроизведение'
       refreshAudioButton()
     })
-    element.src = new URL(url, document.baseURI).href
+    setSoundTrack(state, audio)
+  }
+
+  function setSoundTrack(state, audio) {
+    const sound = state.sound
+    if (!sound) return
+    stopSound(state)
+
+    sound.track = audio?.volume > 0 ? audio : null
+    sound.status = sound.track ? 'ready' : 'silent'
+    sound.needsStart = !!sound.track
+    sound.finished = false
+    sound.error = ''
+    if (!sound.track) return
+
+    const {element} = sound
+    element.volume = audio.volume
+    const src = new URL(audio.url, document.baseURI).href
+    // Reuse the same element so browsers can retain its playback permission.
+    if (element.src !== src || element.error) element.src = src
   }
 
   function stopSound(state) {
@@ -234,10 +278,14 @@
     sound.request = null
     if (['playing', 'starting', 'ended'].includes(sound.status)) sound.status = 'ready'
     if (!sound.element.paused) sound.element.pause()
-    sound.needsStart = true
+    sound.needsStart = !!sound.track
   }
 
   function restartAnimation(state) {
+    if (state.sequence) {
+      enterSequenceStep(state, 0, false)
+      return
+    }
     stopSound(state)
     if (state.sound) state.sound.finished = false
     state.action.reset().play()
@@ -247,9 +295,17 @@
   function playSound(state) {
     const sound = state.sound
     const element = sound.element
-    const offset = state.action.time
+    const sequence = state.sequence
+    const speed = state.item.animation.speed
+    const offset = sequence
+      ? Math.max(0, (state.mixer.time - sequence.audioStartedAt) / speed)
+      : state.action.time
     sound.needsStart = false
-    if (Number.isFinite(element.duration) && offset >= element.duration) return
+    if (Number.isFinite(element.duration) && offset >= element.duration) {
+      sound.status = 'ended'
+      refreshAudioButton()
+      return
+    }
     const request = {}
     sound.request = request
     sound.status = 'starting'
@@ -265,7 +321,7 @@
     }
 
     try {
-      element.playbackRate = state.item.animation.speed
+      element.playbackRate = sequence ? 1 : speed
       element.currentTime = offset
       request.timeout = setTimeout(() => failure({
         name: 'TimeoutError', message: 'Запуск звука не подтверждён',
@@ -277,9 +333,11 @@
         sound.request = null
         sound.status = 'playing'
         sound.error = ''
-        // Re-align if the browser spent time buffering the start.
-        state.action.time = element.currentTime
-        state.mixer.update(0)
+        // Only a standalone clip follows audio buffering. The sequence follows its own clock.
+        if (!sequence) {
+          state.action.time = element.currentTime
+          state.mixer.update(0)
+        }
         refreshAudioButton()
       }, failure)
     } catch (error) {
@@ -287,10 +345,18 @@
     }
   }
 
+  function canStartSound(sound) {
+    return sound?.needsStart && !sound.finished && sound.status === 'ready'
+  }
+
   function updateAnimation(state, delta) {
-    // The mixer always advances on the browser frame clock.
-    const sound = state.sound
-    if (sound?.needsStart && !sound.finished && sound.status === 'ready') {
+    if (state.sequence) {
+      if (canStartSound(state.sound)) playSound(state)
+      advanceSequence(state, delta)
+      if (canStartSound(state.sound)) playSound(state)
+      return
+    }
+    if (canStartSound(state.sound)) {
       state.mixer.update(0)
       playSound(state)
       return
@@ -302,16 +368,18 @@
     if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
     lastDebugUpdate = timestamp
     debugPanel.hidden = false
-    const lines = ['AR v6 · кадр ' + frameCount]
+    const lines = ['AR v8 · кадр ' + frameCount]
     for (const state of states.values()) {
       if (!state.tracked && !state.content) continue
       const clip = state.action?.getClip()
       lines.push(state.name + (state.anchor?.visible ? ' · виден' : ' · вне кадра'))
-      lines.push(clip ? clip.name + ': ' + state.action.time.toFixed(2) + ' / ' +
+      const step = state.sequence
+        ? (state.sequence.index + 1) + '/' + state.sequence.steps.length + ' · ' : ''
+      lines.push(clip ? step + clip.name + ': ' + state.action.time.toFixed(2) + ' / ' +
         clip.duration.toFixed(2) + ' с' : state.error || (state.content ? 'Без анимации' : 'Загрузка модели'))
       if (state.sound) {
-        const {element, status, error} = state.sound
-        lines.push('Звук: ' + status + ' · ' + element.currentTime.toFixed(2) + ' с' +
+        const {element, track, status, error} = state.sound
+        lines.push('Звук: ' + (track ? track.url + ' · ' : '') + status + ' · ' + element.currentTime.toFixed(2) + ' с' +
           (error ? ' · ' + error : ''))
       }
     }
@@ -443,28 +511,110 @@
     fitted.add(orientation)
     const result = new THREE.Group()
     result.add(fitted)
+    prepareAnimation(gltf, state)
+    return result
+  }
+
+  function findClip(clips, clip) {
+    return typeof clip === 'number' ? clips[clip] : THREE.AnimationClip.findByName(clips, clip)
+  }
+
+  function prepareAnimation(gltf, state) {
     const settings = state.item.animation
-    if (settings.enabled && gltf.animations?.length) {
-      const clip = typeof settings.clip === 'number' ? gltf.animations[settings.clip]
-        : THREE.AnimationClip.findByName(gltf.animations, settings.clip)
-      if (!clip) console.warn(state.item.label + ': анимация "' + settings.clip + '" не найдена; модель будет статичной')
-      else {
-        state.mixer = new THREE.AnimationMixer(gltf.scene)
-        state.mixer.timeScale = settings.speed
-        state.action = state.mixer.clipAction(clip)
-        state.action.setLoop(settings.loop ? THREE.LoopRepeat : THREE.LoopOnce, settings.loop ? Infinity : 1)
-        state.action.clampWhenFinished = !settings.loop
-        state.action.play()
-        if (state.sound) {
-          state.mixer.addEventListener('loop', () => stopSound(state))
-          state.mixer.addEventListener('finished', () => {
-            state.sound.finished = true
-            stopSound(state)
-          })
+    if (!settings.enabled) return
+    const clips = gltf.animations || []
+    if (settings.sequence) {
+      const mixer = state.mixer = new THREE.AnimationMixer(gltf.scene)
+      const steps = settings.sequence.map(step => {
+        const clip = findClip(clips, step.clip)
+        if (!(clip?.duration > 0)) throw new Error('Не найдена анимация «' + step.clip + '»')
+        // The same imported clip can represent distinct Unity states with different speeds.
+        const stateClip = new THREE.AnimationClip(clip.name, clip.duration, clip.tracks, clip.blendMode)
+        const action = mixer.clipAction(stateClip).setLoop(THREE.LoopOnce, 1)
+        action.clampWhenFinished = true
+        return {...step, action, duration: clip.duration / step.speed}
+      })
+      state.sequence = {steps, index: -1, outgoing: null, finished: false}
+      enterSequenceStep(state, 0, false)
+      return
+    }
+
+    if (!clips.length) return
+    const clip = findClip(clips, settings.clip)
+    if (!clip) {
+      console.warn(state.item.label + ': анимация "' + settings.clip + '" не найдена; модель будет статичной')
+      return
+    }
+    state.mixer = new THREE.AnimationMixer(gltf.scene)
+    state.mixer.timeScale = settings.speed
+    state.action = state.mixer.clipAction(clip)
+    state.action.setLoop(settings.loop ? THREE.LoopRepeat : THREE.LoopOnce, settings.loop ? Infinity : 1)
+    state.action.clampWhenFinished = !settings.loop
+    state.action.play()
+    if (state.sound) {
+      state.mixer.addEventListener('loop', () => stopSound(state))
+      state.mixer.addEventListener('finished', () => {
+        state.sound.finished = true
+        stopSound(state)
+      })
+    }
+  }
+
+  function enterSequenceStep(state, index, blend) {
+    const {sequence, mixer, action: previousAction} = state
+    const step = sequence.steps[index]
+    const previousStep = sequence.steps[sequence.index]
+    const last = index === sequence.steps.length - 1 && !state.item.animation.loop
+    const duration = step.duration * (last ? 1 : step.exitTime)
+
+    sequence.outgoing?.stop()
+    sequence.outgoing = null
+    sequence.index = index
+    sequence.nextAt = mixer.time + duration
+    sequence.finished = false
+    state.action = step.action.reset().setEffectiveTimeScale(step.speed).setEffectiveWeight(1).play()
+    const fade = blend ? Math.min(previousStep.blend, duration) : 0
+    if (fade > 0 && previousAction !== state.action) {
+      state.action.crossFadeFrom(previousAction, fade, false)
+      sequence.outgoing = previousAction
+      sequence.blendEnd = mixer.time + fade
+    } else if (previousAction && previousAction !== state.action) {
+      previousAction.stop()
+    }
+
+    // Omit audio on an intermediate step to keep playing the same track.
+    if (step.audio !== undefined || index === 0) {
+      sequence.audioStartedAt = mixer.time
+      setSoundTrack(state, step.audio)
+    }
+    mixer.update(0)
+  }
+
+  function advanceSequence(state, delta) {
+    const {sequence, mixer} = state
+    let remaining = delta * state.item.animation.speed
+    while (remaining > 0 && !sequence.finished) {
+      const untilExit = sequence.nextAt - mixer.time
+      if (remaining < untilExit) {
+        mixer.update(remaining)
+        remaining = 0
+      } else {
+        mixer.update(untilExit)
+        remaining -= untilExit
+        const next = sequence.index + 1
+        if (next < sequence.steps.length || state.item.animation.loop) {
+          enterSequenceStep(state, next % sequence.steps.length, true)
+        } else {
+          sequence.finished = true
+          if (state.sound) state.sound.finished = true
+          stopSound(state)
         }
       }
+      if (sequence.outgoing && mixer.time >= sequence.blendEnd) {
+        sequence.outgoing.stop()
+        sequence.outgoing = null
+      }
     }
-    return result
   }
 
   let draco = null
@@ -560,13 +710,13 @@
       config = validate((await json(CONFIG_URL, 'Настройки')).data)
       message('Загрузка маркеров…', true)
       for (const item of config.items) await addTarget(item)
-      const sounding = [...states.values()].filter(({item}) => {
-        const {enabled, speed, audio} = item.animation
-        return enabled && speed > 0 && audio?.volume > 0
-      })
-      if (sounding.length && typeof Audio === 'function') {
-        for (const state of sounding) loadSound(state)
-        if (startButton) await startButtonPress()
+      if (typeof Audio === 'function') {
+        for (const state of states.values()) {
+          const {enabled, speed, audio, sequence} = state.item.animation
+          const firstTrack = sequence ? sequence.find(step => step.audio?.volume > 0)?.audio : audio
+          if (enabled && speed > 0 && firstTrack?.volume > 0) loadSound(state, firstTrack)
+        }
+        if (startButton && [...states.values()].some(state => state.sound)) await startButtonPress()
       }
       if (config.preloadModels) {
         message('Загрузка моделей…', true)
@@ -645,7 +795,7 @@
   resumeButton?.addEventListener('click', () => {
     for (const state of states.values()) {
       if (!state.anchor?.visible || !state.action || state.sound?.status !== 'blocked') continue
-      restartAnimation(state)
+      if (!state.sequence) restartAnimation(state)
       playSound(state)
     }
     refreshAudioButton()
