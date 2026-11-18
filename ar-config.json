@@ -40,14 +40,14 @@
       "label": "Вторая модель",
       "targetJson": "image-targets/marker2.json",
       "modelUrl": "assets/model2_test.glb",
-      "diffuseFill": 0.8,
+      "diffuseFill": 1.1,
       "roughnessFloor": {
         "troll_01_AlbedMat": 0.45,
         "Troll_fur_01Mat": 0.5
       },
-      "size": 0.65,
-      "rotationDegrees": {"x": 90, "y": 0, "z": 0},
-      "offset": {"x": 0, "y": 0, "z": 0},
+      "size": 1.07,
+      "rotationDegrees": {"x": 0, "y": 70, "z": 0},
+      "offset": {"x": 0.2, "y": -0.04, "z": 0},
       "animation": {
         "enabled": true,
         "speed": 1,
