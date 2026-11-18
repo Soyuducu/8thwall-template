@@ -1,0 +1,71 @@
+{
+  "version": 2,
+  "displayMode": "multiple",
+  "preloadModels": false,
+  "lighting": {
+    "ambient": {"color": "#ffffff", "intensity": 0},
+    "hemisphere": {
+      "skyColor": "#ffffff",
+      "groundColor": "#666666",
+      "intensity": 1.2
+    },
+    "directional": [
+      {
+        "color": "#ffffff",
+        "intensity": 0.8,
+        "position": {"x": 1, "y": 2, "z": 3},
+        "target": {"x": 0, "y": 0, "z": 0}
+      }
+    ]
+  },
+  "items": [
+    {
+      "enabled": true,
+      "label": "Первая модель",
+      "targetJson": "image-targets/custom.json",
+      "modelUrl": "assets/model.glb",
+      "size": 0.65,
+      "rotationDegrees": {"x": 90, "y": 0, "z": 0},
+      "offset": {"x": 0, "y": 0, "z": 0},
+      "animation": {
+        "enabled": true,
+        "clip": 0,
+        "speed": 1,
+        "loop": true,
+        "restartOnFound": false
+      }
+    },
+    {
+      "enabled": false,
+      "label": "Вторая модель",
+      "targetJson": "image-targets/marker2.json",
+      "modelUrl": "assets/model2.glb",
+      "size": 0.65,
+      "rotationDegrees": {"x": 90, "y": 0, "z": 0},
+      "offset": {"x": 0, "y": 0, "z": 0},
+      "animation": {
+        "enabled": true,
+        "clip": 0,
+        "speed": 1,
+        "loop": true,
+        "restartOnFound": false
+      }
+    },
+    {
+      "enabled": false,
+      "label": "Третья модель",
+      "targetJson": "image-targets/marker3.json",
+      "modelUrl": "assets/model3.glb",
+      "size": 0.65,
+      "rotationDegrees": {"x": 90, "y": 0, "z": 0},
+      "offset": {"x": 0, "y": 0, "z": 0},
+      "animation": {
+        "enabled": true,
+        "clip": 0,
+        "speed": 1,
+        "loop": true,
+        "restartOnFound": false
+      }
+    }
+  ]
+}
