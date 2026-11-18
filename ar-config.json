@@ -40,6 +40,10 @@
       "label": "Вторая модель",
       "targetJson": "image-targets/marker2.json",
       "modelUrl": "assets/model2_test.glb",
+      "roughnessFloor": {
+        "troll_01_AlbedMat": 0.45,
+        "Troll_fur_01Mat": 0.5
+      },
       "size": 0.65,
       "rotationDegrees": {"x": 90, "y": 0, "z": 0},
       "offset": {"x": 0, "y": 0, "z": 0},

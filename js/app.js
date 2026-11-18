@@ -94,12 +94,21 @@
       }
       const size = finite(item.size, 0.65, label + '.size', 0)
       if (!size) throw new Error(label + '.size должен быть больше нуля')
+      const roughnessFloor = new Map(Object.entries(
+        object(item.roughnessFloor ?? {}, label + '.roughnessFloor')
+      ).map(([name, value]) => {
+        const key = label + '.roughnessFloor.' + name
+        const floor = finite(value, 0, key, 0)
+        if (floor > 1) throw new Error(key + ': максимум 1')
+        return [name, floor]
+      }))
       return [{
         label: item.label === undefined ? 'Модель ' + (index + 1) : text(item.label, label + '.label'),
         targetJson: text(item.targetJson, label + '.targetJson'),
         modelUrl: text(item.modelUrl, label + '.modelUrl'), size,
         rotationDegrees: vector(item.rotationDegrees, {x: 90, y: 0, z: 0}, label + '.rotationDegrees'),
         offset: vector(item.offset, {x: 0, y: 0, z: 0}, label + '.offset'),
+        roughnessFloor,
         animation: {
           enabled: boolean(animation.enabled, true, label + '.animation.enabled'), clip,
           speed: finite(animation.speed, 1, label + '.animation.speed', 0),
@@ -391,7 +400,33 @@
     return bounds
   }
 
+  function applyRoughnessFloor(root, floors) {
+    if (!floors.size) return
+    root.traverse(mesh => {
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      for (const material of materials) {
+        if (!material?.isMeshStandardMaterial) continue
+        const floor = floors.get(material.name)
+        if (!floor) continue
+
+        material.onBeforeCompile = shader => {
+          shader.uniforms.arRoughnessFloor = {value: floor}
+          // Remap roughness after sampling the glTF texture to retain its variation.
+          shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <roughnessmap_fragment>',
+            '#include <roughnessmap_fragment>\n' +
+            'roughnessFactor = mix(arRoughnessFloor, 1.0, roughnessFactor);'
+          ).replace(
+            '#include <common>',
+            '#include <common>\nuniform float arRoughnessFloor;'
+          )
+        }
+      }
+    })
+  }
+
   function prepareModel(gltf, state) {
+    applyRoughnessFloor(gltf.scene, state.item.roughnessFloor)
     const orientation = new THREE.Group()
     const r = state.item.rotationDegrees
     orientation.rotation.set(...['x', 'y', 'z'].map(axis => THREE.MathUtils.degToRad(r[axis])))
