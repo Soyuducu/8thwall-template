@@ -40,6 +40,7 @@
       "label": "Вторая модель",
       "targetJson": "image-targets/marker2.json",
       "modelUrl": "assets/model2_test.glb",
+      "diffuseFill": 0.5,
       "roughnessFloor": {
         "troll_01_AlbedMat": 0.45,
         "Troll_fur_01Mat": 0.5
@@ -52,6 +53,7 @@
         "speed": 1,
         "loop": true,
         "restartOnFound": false,
+        "attackOnTap": "attak_01",
         "sequence": [
           {
             "clip": "idle_base",

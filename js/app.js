@@ -9,7 +9,10 @@
   const debug = new URL(location.href).searchParams.get('debug') === '1'
   const debugPanel = document.getElementById('playback-debug')
   const states = new Map()
-  let config, scene, selected = null, foundSequence = 0, fatal = false
+  let config, scene, camera, selected = null, foundSequence = 0, fatal = false
+  let activeAttack = null
+  let tapStart = null
+  const tapMeshes = new WeakMap()
   let started = false
   let animationFrame = null
   let previousFrameTime = null
@@ -118,6 +121,12 @@
       const animation = object(item.animation ?? {}, label + '.animation')
       const animationKey = label + '.animation'
       const clip = animationClip(animation.clip ?? 0, animationKey + '.clip')
+      const sequence = animationSequence(animation.sequence, animationKey + '.sequence')
+      const attackClip = animation.attackOnTap
+      const tapAttackIndex = attackClip === undefined ? -1 : sequence?.findIndex(step => step.clip === attackClip)
+      if (attackClip !== undefined && !(tapAttackIndex >= 0)) {
+        throw new Error(animationKey + '.attackOnTap: требуется клип из sequence')
+      }
       const size = finite(item.size, 0.65, label + '.size', 0)
       if (!size) throw new Error(label + '.size должен быть больше нуля')
       const roughnessFloor = new Map(Object.entries(
@@ -135,13 +144,14 @@
         rotationDegrees: vector(item.rotationDegrees, {x: 90, y: 0, z: 0}, label + '.rotationDegrees'),
         offset: vector(item.offset, {x: 0, y: 0, z: 0}, label + '.offset'),
         roughnessFloor,
+        diffuseFill: finite(item.diffuseFill, 0, label + '.diffuseFill', 0),
         animation: {
           enabled: boolean(animation.enabled, true, label + '.animation.enabled'), clip,
           speed: finite(animation.speed, 1, label + '.animation.speed', 0),
           loop: boolean(animation.loop, true, label + '.animation.loop'),
           restartOnFound: boolean(animation.restartOnFound, false, label + '.animation.restartOnFound'),
           audio: audioSettings(animation.audio, animationKey + '.audio'),
-          sequence: animationSequence(animation.sequence, animationKey + '.sequence'),
+          sequence, tapAttackIndex,
         },
       }]
     })
@@ -209,11 +219,14 @@
     return state.tracked && (config.displayMode === 'multiple' || selected === state)
   }
 
+  function canRetryAudio(state) {
+    return (!activeAttack || state === activeAttack) &&
+      state.anchor?.visible && state.action && state.sound?.status === 'blocked'
+  }
+
   function refreshAudioButton() {
     if (!resumeButton) return
-    resumeButton.hidden = fatal || document.hidden || ![...states.values()].some(state =>
-      state.anchor?.visible && state.action && state.sound?.status === 'blocked'
-    )
+    resumeButton.hidden = fatal || document.hidden || ![...states.values()].some(canRetryAudio)
   }
 
   function startButtonPress() {
@@ -368,11 +381,12 @@
     if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
     lastDebugUpdate = timestamp
     debugPanel.hidden = false
-    const lines = ['AR v8 · кадр ' + frameCount]
+    const lines = ['AR v9 · кадр ' + frameCount]
     for (const state of states.values()) {
       if (!state.tracked && !state.content) continue
       const clip = state.action?.getClip()
-      lines.push(state.name + (state.anchor?.visible ? ' · виден' : ' · вне кадра'))
+      lines.push(state.name + (state.anchor?.visible ? ' · виден' : ' · вне кадра') +
+        (activeAttack === state ? ' · атака по тапу' : ''))
       const step = state.sequence
         ? (state.sequence.index + 1) + '/' + state.sequence.steps.length + ' · ' : ''
       lines.push(clip ? step + clip.name + ': ' + state.action.time.toFixed(2) + ' / ' +
@@ -396,8 +410,11 @@
     const delta = previousFrameTime == null ? 0 : (timestamp - previousFrameTime) / 1000
     previousFrameTime = timestamp
     frameCount++
+    const attacking = activeAttack
     for (const state of states.values()) {
+      if (attacking && state !== attacking) continue
       if (state.anchor?.visible && state.mixer) updateAnimation(state, delta)
+      else if (state === attacking) advanceSequence(state, delta)
     }
     updateDebug(timestamp)
   }
@@ -406,6 +423,12 @@
     if (animationFrame !== null) window.cancelAnimationFrame(animationFrame)
     animationFrame = null
     previousFrameTime = null
+    tapStart = null
+    if (activeAttack) {
+      const state = activeAttack
+      activeAttack = null
+      enterSequenceStep(state, 0, false)
+    }
     for (const state of states.values()) stopSound(state)
   }
 
@@ -468,25 +491,30 @@
     return bounds
   }
 
-  function applyRoughnessFloor(root, floors) {
-    if (!floors.size) return
+  function applyMaterialSettings(root, {roughnessFloor, diffuseFill}) {
+    if (!roughnessFloor.size && !diffuseFill) return
     root.traverse(mesh => {
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       for (const material of materials) {
         if (!material?.isMeshStandardMaterial) continue
-        const floor = floors.get(material.name)
-        if (!floor) continue
+        const floor = roughnessFloor.get(material.name) || 0
+        if (!floor && !diffuseFill) continue
 
         material.onBeforeCompile = shader => {
           shader.uniforms.arRoughnessFloor = {value: floor}
-          // Remap roughness after sampling the glTF texture to retain its variation.
+          shader.uniforms.arDiffuseFill = {value: diffuseFill}
           shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <common>',
+            '#include <common>\nuniform float arRoughnessFloor;\nuniform float arDiffuseFill;'
+          ).replace(
             '#include <roughnessmap_fragment>',
             '#include <roughnessmap_fragment>\n' +
             'roughnessFactor = mix(arRoughnessFloor, 1.0, roughnessFactor);'
           ).replace(
-            '#include <common>',
-            '#include <common>\nuniform float arRoughnessFloor;'
+            '#include <lights_fragment_begin>',
+            '#include <lights_fragment_begin>\n' +
+            '#if defined( RE_IndirectDiffuse )\n' +
+            'irradiance += getAmbientLightIrradiance( vec3( arDiffuseFill ) );\n#endif'
           )
         }
       }
@@ -494,7 +522,7 @@
   }
 
   function prepareModel(gltf, state) {
-    applyRoughnessFloor(gltf.scene, state.item.roughnessFloor)
+    applyMaterialSettings(gltf.scene, state.item)
     const orientation = new THREE.Group()
     const r = state.item.rotationDegrees
     orientation.rotation.set(...['x', 'y', 'z'].map(axis => THREE.MathUtils.degToRad(r[axis])))
@@ -565,7 +593,7 @@
     const step = sequence.steps[index]
     const previousStep = sequence.steps[sequence.index]
     const last = index === sequence.steps.length - 1 && !state.item.animation.loop
-    const duration = step.duration * (last ? 1 : step.exitTime)
+    const duration = step.duration * (last || activeAttack === state ? 1 : step.exitTime)
 
     sequence.outgoing?.stop()
     sequence.outgoing = null
@@ -602,7 +630,11 @@
         mixer.update(untilExit)
         remaining -= untilExit
         const next = sequence.index + 1
-        if (next < sequence.steps.length || state.item.animation.loop) {
+        if (activeAttack === state) {
+          activeAttack = null
+          enterSequenceStep(state, 0, false)
+          refreshAudioButton()
+        } else if (next < sequence.steps.length || state.item.animation.loop) {
           enterSequenceStep(state, next % sequence.steps.length, true)
         } else {
           sequence.finished = true
@@ -616,6 +648,95 @@
       }
     }
   }
+
+  function skinnedTapMesh(mesh) {
+    const source = mesh.geometry
+    const positions = source.getAttribute('position')
+    let proxy = tapMeshes.get(mesh)
+    if (!proxy) {
+      const geometry = new THREE.BufferGeometry()
+      geometry.setIndex(source.index)
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions.count * 3), 3))
+      geometry.groups = source.groups
+      geometry.setDrawRange(source.drawRange.start, source.drawRange.count)
+      proxy = new THREE.Mesh(geometry, mesh.material)
+      tapMeshes.set(mesh, proxy)
+    }
+
+    // Three.js r128 raycasts skinned meshes in their bind pose. Skin just the vertices used for picking.
+    const vertex = new THREE.Vector3()
+    const deformed = proxy.geometry.getAttribute('position')
+    for (let i = 0; i < positions.count; i++) {
+      vertex.fromBufferAttribute(positions, i)
+      mesh.boneTransform(i, vertex)
+      deformed.setXYZ(i, vertex.x, vertex.y, vertex.z)
+    }
+    proxy.geometry.computeBoundingSphere()
+    proxy.matrixWorld.copy(mesh.matrixWorld)
+    return proxy
+  }
+
+  function tapAttack(x, y) {
+    if (fatal || document.hidden || !camera || activeAttack) return
+    const {left, top, width, height} = canvas.getBoundingClientRect()
+    if (!width || !height || x < left || y < top || x > left + width || y > top + height) return
+    const raycaster = new THREE.Raycaster()
+    camera.updateWorldMatrix(true, false)
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert()
+    raycaster.setFromCamera({x: (x - left) / width * 2 - 1, y: 1 - (y - top) / height * 2}, camera)
+
+    let target = null
+    let distance = Infinity
+    for (const state of states.values()) {
+      const {tapAttackIndex, speed} = state.item.animation
+      if (!state.anchor?.visible || !state.sequence || tapAttackIndex < 0 || !speed ||
+          state.sequence.index === tapAttackIndex) continue
+      state.anchor.updateMatrixWorld(true)
+      const hits = []
+      state.content.traverseVisible(mesh => {
+        if (!mesh.isMesh || !camera.layers.test(mesh.layers)) return
+        const pickMesh = mesh.isSkinnedMesh ? skinnedTapMesh(mesh) : mesh
+        pickMesh.raycast(raycaster, hits)
+      })
+      for (const hit of hits) {
+        if (hit.distance < distance) {
+          distance = hit.distance
+          target = state
+        }
+      }
+    }
+    if (!target) return
+
+    activeAttack = target
+    for (const state of states.values()) {
+      if (state !== target) stopSound(state)
+    }
+    enterSequenceStep(target, target.item.animation.tapAttackIndex, false)
+    if (canStartSound(target.sound)) playSound(target)
+    refreshAudioButton()
+  }
+
+  function movedAwayFromTap({clientX, clientY}) {
+    return Math.hypot(clientX - tapStart.x, clientY - tapStart.y) > 12
+  }
+
+  canvas.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || event.button !== 0) return
+    // A press that started during an attack cannot become a new tap when it ends.
+    tapStart = activeAttack ? null : {id: event.pointerId, x: event.clientX, y: event.clientY}
+  })
+  canvas.addEventListener('pointermove', event => {
+    if (tapStart?.id === event.pointerId && movedAwayFromTap(event)) tapStart = null
+  })
+  canvas.addEventListener('pointercancel', event => {
+    if (tapStart?.id === event.pointerId) tapStart = null
+  })
+  canvas.addEventListener('pointerup', event => {
+    if (tapStart?.id !== event.pointerId) return
+    const isTap = !movedAwayFromTap(event)
+    tapStart = null
+    if (isTap) tapAttack(event.clientX, event.clientY)
+  })
 
   let draco = null
   function requestModel(state) {
@@ -655,7 +776,7 @@
       state.tracked = true
       state.lastFound = ++foundSequence
       selected = state
-      if (state.item.animation.restartOnFound && state.action) {
+      if (state.item.animation.restartOnFound && state.action && activeAttack !== state) {
         restartAnimation(state)
       }
     }
@@ -748,6 +869,7 @@
           onStart() {
             const xrScene = XR8.Threejs.xrScene()
             scene = xrScene.scene
+            camera = xrScene.camera
             // Three.js r128 needs an explicit conversion for display.
             xrScene.renderer.outputEncoding = THREE.sRGBEncoding
             lights()
@@ -794,7 +916,7 @@
   })
   resumeButton?.addEventListener('click', () => {
     for (const state of states.values()) {
-      if (!state.anchor?.visible || !state.action || state.sound?.status !== 'blocked') continue
+      if (!canRetryAudio(state)) continue
       if (!state.sequence) restartAnimation(state)
       playSound(state)
     }
