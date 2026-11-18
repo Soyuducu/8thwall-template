@@ -4,9 +4,11 @@
   const canvas = document.getElementById('canvas')
   const overlay = document.getElementById('loading')
   const status = document.getElementById('status')
+  const startButton = document.getElementById('start-ar')
   const states = new Map()
   let config, scene, clock, selected = null, foundSequence = 0, fatal = false
   let started = false
+  let audioContext = null
 
   function message(text, busy = false, error = false) {
     if (fatal) return
@@ -18,6 +20,7 @@
 
   function fail(error) {
     console.error(error)
+    for (const state of states.values()) stopSound(state)
     message('Ошибка: ' + (error?.message || String(error)), false, true)
     fatal = true
   }
@@ -75,6 +78,9 @@
       const item = object(value, label)
       if (!boolean(item.enabled, true, label + '.enabled')) return []
       const animation = object(item.animation ?? {}, label + '.animation')
+      const audio = animation.audio == null ? null : object(animation.audio, label + '.animation.audio')
+      const volume = audio ? finite(audio.volume, 1, label + '.animation.audio.volume', 0) : 0
+      if (volume > 1) throw new Error(label + '.animation.audio.volume: максимум 1')
       const clip = animation.clip ?? 0
       if (!(typeof clip === 'string' && clip.length) && !(Number.isInteger(clip) && clip >= 0)) {
         throw new Error(label + '.animation.clip: требуется номер с нуля или имя анимации')
@@ -92,6 +98,7 @@
           speed: finite(animation.speed, 1, label + '.animation.speed', 0),
           loop: boolean(animation.loop, true, label + '.animation.loop'),
           restartOnFound: boolean(animation.restartOnFound, false, label + '.animation.restartOnFound'),
+          audio: audio && {url: text(audio.url, label + '.animation.audio.url'), volume},
         },
       }]
     })
@@ -159,14 +166,124 @@
     return state.tracked && (config.displayMode === 'multiple' || selected === state)
   }
 
+  function startButtonPress(Context) {
+    message('')
+    startButton.hidden = false
+    return new Promise(resolve => {
+      startButton.addEventListener('click', async () => {
+        startButton.hidden = true
+        let context, timeout
+        try {
+          context = new Context()
+          await Promise.race([
+            context.resume(),
+            new Promise((_, reject) => {
+              timeout = setTimeout(() => reject(new Error('Браузер не разрешил звук')), 3000)
+            }),
+          ])
+          audioContext = context
+        } catch (error) {
+          console.warn('Не удалось включить звук:', error)
+          context?.close().catch(() => {})
+        } finally {
+          clearTimeout(timeout)
+          resolve()
+        }
+      }, {once: true})
+    })
+  }
+
+  async function loadSound(sound, url) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 12000)
+    try {
+      const response = await fetch(new URL(url, document.baseURI), {signal: controller.signal})
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      const bytes = await response.arrayBuffer()
+      sound.buffer = await audioContext.decodeAudioData(bytes)
+    } catch (error) {
+      console.warn('Не удалось загрузить звук ' + url, error)
+    } finally {
+      clearTimeout(timeout)
+      sound.loading = false
+    }
+  }
+
+  function stopSound(state) {
+    const sound = state.sound
+    if (!sound) return
+    if (sound.source) {
+      sound.source.stop()
+      sound.source.disconnect()
+      sound.source = null
+    }
+    sound.lastTime = null
+  }
+
+  function playSound(state, when) {
+    const sound = state.sound
+    const offset = state.action.time
+    const end = Math.min(sound.buffer.duration, state.action.getClip().duration)
+    if (offset >= end) return
+    const source = audioContext.createBufferSource()
+    source.buffer = sound.buffer
+    source.playbackRate.value = state.item.animation.speed
+    source.connect(sound.gain)
+    source.onended = () => {
+      if (sound.source === source) sound.source = null
+      source.disconnect()
+    }
+    source.start(when, offset, end - offset)
+    sound.source = source
+  }
+
+  function updateAnimation(state, delta) {
+    const sound = state.sound
+    if (!sound) {
+      state.mixer.update(delta)
+      return
+    }
+    if (sound.loading) {
+      state.mixer.update(0)
+      return
+    }
+    if (!sound.buffer) {
+      state.mixer.update(delta)
+      return
+    }
+    if (sound.finished) return
+    if (audioContext.state !== 'running') {
+      stopSound(state)
+      return
+    }
+
+    // Use the audio clock so the animation does not lag behind on slow frames.
+    const now = audioContext.currentTime
+    if (sound.lastTime === null) {
+      state.mixer.update(0)
+      playSound(state, now)
+    } else {
+      sound.looped = false
+      state.mixer.update(now - sound.lastTime)
+      if (sound.finished || sound.looped) {
+        stopSound(state)
+        if (!sound.finished) playSound(state, now)
+      }
+    }
+    sound.lastTime = now
+  }
+
   function refresh() {
     if (!scene || fatal) return
     const active = [...states.values()].filter(eligible)
     for (const state of states.values()) {
-      if (state.anchor) state.anchor.visible = eligible(state) && !!state.content
+      if (!state.anchor) continue
+      state.anchor.visible = eligible(state) && !!state.content
+      if (!state.anchor.visible) stopSound(state)
     }
     const pending = active.filter(state => state.promise && !state.content && !state.error)
     if (pending.length) message('Загрузка: ' + pending.map(s => s.item.label).join(', ') + '…', true)
+    else if (active.some(state => state.action && state.sound?.loading)) message('Загрузка звука…', true)
     else if (active.some(state => state.content)) message('')
     else if (active.some(state => state.error)) {
       const state = active.find(s => s.error)
@@ -244,6 +361,10 @@
         state.action.setLoop(settings.loop ? THREE.LoopRepeat : THREE.LoopOnce, settings.loop ? Infinity : 1)
         state.action.clampWhenFinished = !settings.loop
         state.action.play()
+        if (state.sound) {
+          state.mixer.addEventListener('loop', () => { state.sound.looped = true })
+          state.mixer.addEventListener('finished', () => { state.sound.finished = true })
+        }
       }
     }
     return result
@@ -287,7 +408,11 @@
       state.tracked = true
       state.lastFound = ++foundSequence
       selected = state
-      if (state.item.animation.restartOnFound && state.action) state.action.reset().play()
+      if (state.item.animation.restartOnFound && state.action) {
+        stopSound(state)
+        if (state.sound) state.sound.finished = false
+        state.action.reset().play()
+      }
     }
     applyPose(state)
     requestModel(state)
@@ -340,6 +465,25 @@
       config = validate((await json(CONFIG_URL, 'Настройки')).data)
       message('Загрузка маркеров…', true)
       for (const item of config.items) await addTarget(item)
+      const sounding = [...states.values()].filter(({item}) => {
+        const {enabled, speed, audio} = item.animation
+        return enabled && speed > 0 && audio?.volume > 0
+      })
+      const Context = window.AudioContext || window.webkitAudioContext
+      if (sounding.length && Context && startButton) {
+        await startButtonPress(Context)
+        if (audioContext) {
+          for (const state of sounding) {
+            const {url, volume} = state.item.animation.audio
+            const gain = audioContext.createGain()
+            gain.gain.value = volume
+            gain.connect(audioContext.destination)
+            state.sound = {gain, loading: true, buffer: null, source: null, lastTime: null,
+              finished: false, looped: false}
+            loadSound(state.sound, url).finally(refresh)
+          }
+        }
+      }
       if (config.preloadModels) {
         message('Загрузка моделей…', true)
         await Promise.all([...states.values()].map(requestModel))
@@ -386,9 +530,13 @@
           },
           onUpdate() {
             const delta = clock ? Math.min(clock.getDelta(), 0.1) : 0
+            if (document.hidden) return
             for (const state of states.values()) {
-              if (state.anchor?.visible && state.mixer) state.mixer.update(delta)
+              if (state.anchor?.visible && state.mixer) updateAnimation(state, delta)
             }
+          },
+          onDetach() {
+            for (const state of states.values()) stopSound(state)
           },
           onCameraStatusChange({status: cameraStatus, reason}) {
             if (cameraStatus === 'requesting') message('Разрешите доступ к камере…', true)
@@ -412,6 +560,11 @@
     } catch (error) { fail(error) }
   }
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      for (const state of states.values()) stopSound(state)
+    }
+  })
   document.getElementById('xr-engine')?.addEventListener('error', () => fail(new Error('Не загрузился external/xr/xr.js')))
   if (window.XR8) start()
   else window.addEventListener('xrloaded', start, {once: true})

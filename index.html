@@ -19,11 +19,16 @@
       border-radius: 50%; animation: spin .8s linear infinite; }
     #loading.busy #spinner { display: block; }
     #loading.error { background: rgba(110,20,20,.95); }
+    #start-ar { position: fixed; z-index: 3; inset: 50% auto auto 50%;
+      transform: translate(-50%, -50%); min-height: 48px; white-space: nowrap;
+      padding: 12px 24px; border: 0; border-radius: 12px; background: #fff;
+      color: #151515; font: 600 16px system-ui, sans-serif; cursor: pointer; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
+  <button id="start-ar" type="button" hidden>Начать AR</button>
   <div id="loading" class="busy" role="status" aria-live="polite">
     <span id="spinner" aria-hidden="true"></span><span id="status">Загрузка движка…</span>
   </div>
@@ -32,6 +37,6 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <script src="js/app.js?v=3"></script>
+  <script src="js/app.js?v=4"></script>
 </body>
 </html>

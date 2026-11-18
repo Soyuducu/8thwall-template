@@ -48,7 +48,8 @@
         "clip": 0,
         "speed": 1,
         "loop": true,
-        "restartOnFound": false
+        "restartOnFound": false,
+        "audio": {"url": "assets/troll.mp3", "volume": 1}
       }
     },
     {
