@@ -46,7 +46,7 @@
         "Troll_fur_01Mat": 0.5
       },
       "size": 1.07,
-      "rotationDegrees": {"x": 0, "y": 70, "z": 0},
+      "rotationDegrees": {"x": 0, "y": -10, "z": 0},
       "offset": {"x": 0.2, "y": -0.04, "z": 0},
       "animation": {
         "enabled": true,
