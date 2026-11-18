@@ -49,11 +49,27 @@
       "offset": {"x": 0, "y": 0, "z": 0},
       "animation": {
         "enabled": true,
-        "clip": "attak_01",
         "speed": 1,
         "loop": true,
         "restartOnFound": false,
-        "audio": {"url": "assets/troll.mp3", "volume": 1}
+        "sequence": [
+          {
+            "clip": "idle_base",
+            "speed": 0.8,
+            "exitTime": 0.86724746,
+            "blend": 0.651443,
+            "audio": {"url": "assets/troll.mp3", "volume": 1}
+          },
+          {"clip": "idle_turn", "speed": 0.7, "exitTime": 0.86520946, "blend": 0.6149483},
+          {"clip": "idle_base", "speed": 0.7, "exitTime": 0.86456865, "blend": 0.66675043},
+          {
+            "clip": "attak_01",
+            "speed": 0.6,
+            "exitTime": 0.8840257,
+            "blend": 0.8736291,
+            "audio": {"url": "assets/troll_attack.mp3", "volume": 1}
+          }
+        ]
       }
     },
     {
