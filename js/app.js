@@ -103,6 +103,7 @@
       return {
         clip: animationClip(step.clip, key + '.clip'), speed, exitTime,
         blend: finite(step.blend, 0, key + '.blend', 0),
+        audioStartTime: finite(step.audioStartTime, 0, key + '.audioStartTime', 0),
         audio: step.audio === undefined ? undefined : audioSettings(step.audio, key + '.audio'),
       }
     })
@@ -311,7 +312,7 @@
     const sequence = state.sequence
     const speed = state.item.animation.speed
     const offset = sequence
-      ? Math.max(0, (state.mixer.time - sequence.audioStartedAt) / speed)
+      ? Math.max(0, (state.mixer.time - sequence.audioStartsAt) / speed)
       : state.action.time
     sound.needsStart = false
     if (Number.isFinite(element.duration) && offset >= element.duration) {
@@ -358,18 +359,19 @@
     }
   }
 
-  function canStartSound(sound) {
-    return sound?.needsStart && !sound.finished && sound.status === 'ready'
+  function canStartSound({sound, sequence, mixer}) {
+    return sound?.needsStart && !sound.finished && sound.status === 'ready' &&
+      (!sequence || mixer.time >= sequence.audioStartsAt)
   }
 
   function updateAnimation(state, delta) {
     if (state.sequence) {
-      if (canStartSound(state.sound)) playSound(state)
+      if (canStartSound(state)) playSound(state)
       advanceSequence(state, delta)
-      if (canStartSound(state.sound)) playSound(state)
+      if (canStartSound(state)) playSound(state)
       return
     }
-    if (canStartSound(state.sound)) {
+    if (canStartSound(state)) {
       state.mixer.update(0)
       playSound(state)
       return
@@ -381,7 +383,7 @@
     if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
     lastDebugUpdate = timestamp
     debugPanel.hidden = false
-    const lines = ['AR v9 · кадр ' + frameCount]
+    const lines = ['AR v10 · кадр ' + frameCount]
     for (const state of states.values()) {
       if (!state.tracked && !state.content) continue
       const clip = state.action?.getClip()
@@ -612,7 +614,8 @@
 
     // Omit audio on an intermediate step to keep playing the same track.
     if (step.audio !== undefined || index === 0) {
-      sequence.audioStartedAt = mixer.time
+      // The cue is in clip seconds. The mixer clock already follows the sequence speed.
+      sequence.audioStartsAt = mixer.time + step.audioStartTime / step.speed
       setSoundTrack(state, step.audio)
     }
     mixer.update(0)
@@ -712,7 +715,7 @@
       if (state !== target) stopSound(state)
     }
     enterSequenceStep(target, target.item.animation.tapAttackIndex, false)
-    if (canStartSound(target.sound)) playSound(target)
+    if (canStartSound(target)) playSound(target)
     refreshAudioButton()
   }
 

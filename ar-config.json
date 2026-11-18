@@ -40,7 +40,7 @@
       "label": "Вторая модель",
       "targetJson": "image-targets/marker2.json",
       "modelUrl": "assets/model2_test.glb",
-      "diffuseFill": 0.5,
+      "diffuseFill": 0.8,
       "roughnessFloor": {
         "troll_01_AlbedMat": 0.45,
         "Troll_fur_01Mat": 0.5
@@ -69,6 +69,7 @@
             "speed": 0.6,
             "exitTime": 0.8840257,
             "blend": 0.8736291,
+            "audioStartTime": 0.8,
             "audio": {"url": "assets/troll_attack.mp3", "volume": 1}
           }
         ]
