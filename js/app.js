@@ -188,13 +188,39 @@
     }
   }
 
+  function modelBounds(root) {
+    root.updateMatrixWorld(true)
+    const bounds = new THREE.Box3()
+    const meshBounds = new THREE.Box3()
+    const vertex = new THREE.Vector3()
+    root.traverse(mesh => {
+      const geometry = mesh.geometry
+      if (!geometry) return
+      if (!mesh.isSkinnedMesh) {
+        if (!geometry.boundingBox) geometry.computeBoundingBox()
+        bounds.union(meshBounds.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld))
+        return
+      }
+
+      // Three.js r128 uses undeformed vertices for Box3 and frustum culling.
+      // Measure the skinned pose once so the rig and mesh sizes agree.
+      mesh.frustumCulled = false
+      const positions = geometry.getAttribute('position')
+      for (let index = 0; index < positions.count; index++) {
+        vertex.fromBufferAttribute(positions, index)
+        mesh.boneTransform(index, vertex)
+        bounds.expandByPoint(vertex.applyMatrix4(mesh.matrixWorld))
+      }
+    })
+    return bounds
+  }
+
   function prepareModel(gltf, state) {
     const orientation = new THREE.Group()
     const r = state.item.rotationDegrees
     orientation.rotation.set(...['x', 'y', 'z'].map(axis => THREE.MathUtils.degToRad(r[axis])))
     orientation.add(gltf.scene)
-    orientation.updateMatrixWorld(true)
-    const bounds = new THREE.Box3().setFromObject(orientation)
+    const bounds = modelBounds(orientation)
     if (bounds.isEmpty()) throw new Error('В модели нет видимой геометрии')
     const size = bounds.getSize(new THREE.Vector3())
     const longest = Math.max(size.x, size.y, size.z)
