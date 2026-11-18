@@ -368,7 +368,10 @@
         {
           name: 'museum-image-models',
           onStart() {
-            scene = XR8.Threejs.xrScene().scene
+            const xrScene = XR8.Threejs.xrScene()
+            scene = xrScene.scene
+            // Three.js r128 needs an explicit conversion for display.
+            xrScene.renderer.outputEncoding = THREE.sRGBEncoding
             lights()
             for (const state of states.values()) {
               state.anchor = new THREE.Group()
