@@ -40,6 +40,29 @@
       "label": "Вторая модель",
       "targetJson": "image-targets/marker2.json",
       "modelUrl": "assets/model2_test.glb",
+      "fur": {
+        "material": "Troll_fur_01Mat",
+        "alphaMap": "assets/jotun-fur-alpha.png",
+        "vertexCount": 9478,
+        "rows": [
+          {"start": 703, "count": 18, "tipOffset": {"x": -0.07, "y": 0.13, "z": 0}, "tipOpacity": 0.88},
+          {"start": 757, "count": 23, "tipOffset": {"x": 0.05, "y": -0.14, "z": 0}, "tipOpacity": 0.89},
+          {"start": 2527, "count": 17, "tipOffset": {"x": -0.07, "y": 0.14, "z": 0}, "tipOpacity": 0.86},
+          {"start": 2658, "count": 18, "tipOffset": {"x": 0.05, "y": 0.14, "z": 0}, "tipOpacity": 0.87},
+          {"start": 2900, "count": 28, "tipOffset": {"x": -0.055, "y": -0.11, "z": 0}, "tipOpacity": 0.91},
+          {"start": 3810, "count": 17, "tipOffset": {"x": 0.045, "y": -0.12, "z": 0}, "tipOpacity": 0.9},
+          {"start": 4595, "count": 12, "tipOffset": {"x": 0.065, "y": 0.15, "z": 0}, "tipOpacity": 0.85},
+          {"start": 4639, "count": 17, "tipOffset": {"x": -0.055, "y": -0.135, "z": 0}, "tipOpacity": 0.9},
+          {"start": 5272, "count": 18, "tipOffset": {"x": 0.07, "y": 0.13, "z": 0}, "tipOpacity": 0.88},
+          {"start": 5326, "count": 23, "tipOffset": {"x": -0.05, "y": -0.14, "z": 0}, "tipOpacity": 0.89},
+          {"start": 7096, "count": 17, "tipOffset": {"x": 0.07, "y": 0.14, "z": 0}, "tipOpacity": 0.86},
+          {"start": 7227, "count": 18, "tipOffset": {"x": -0.05, "y": 0.14, "z": 0}, "tipOpacity": 0.87},
+          {"start": 7469, "count": 28, "tipOffset": {"x": 0.055, "y": -0.11, "z": 0}, "tipOpacity": 0.91},
+          {"start": 8379, "count": 17, "tipOffset": {"x": -0.045, "y": -0.12, "z": 0}, "tipOpacity": 0.9},
+          {"start": 9164, "count": 12, "tipOffset": {"x": -0.065, "y": 0.15, "z": 0}, "tipOpacity": 0.85},
+          {"start": 9208, "count": 17, "tipOffset": {"x": 0.055, "y": -0.135, "z": 0}, "tipOpacity": 0.9}
+        ]
+      },
       "diffuseFill": 1.25,
       "markerKey": {
         "intensity": 1.05,
