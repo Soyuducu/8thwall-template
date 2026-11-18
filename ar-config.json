@@ -49,9 +49,9 @@
         "troll_01_AlbedMat": 0.45,
         "Troll_fur_01Mat": 0.5
       },
-      "size": 0.8,
+      "size": 1.2,
       "rotationDegrees": {"x": 90, "y": 0, "z": 0},
-      "offset": {"x": 0.025, "y": -0.061, "z": 0.005},
+      "offset": {"x": 0.0375, "y": -0.0915, "z": 0.0075},
       "animation": {
         "enabled": true,
         "speed": 1,
