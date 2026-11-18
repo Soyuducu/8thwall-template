@@ -109,6 +109,28 @@
     })
   }
 
+  function furDetails(raw, label) {
+    if (raw == null) return null
+    const fur = object(raw, label)
+    const vertexCount = finite(fur.vertexCount, 0, label + '.vertexCount', 1)
+    if (!Number.isInteger(vertexCount) || !Array.isArray(fur.rows)) {
+      throw new Error(label + ': требуется число вершин и список прядей')
+    }
+    const rows = fur.rows.map((value, index) => {
+      const key = label + '.rows[' + index + ']'
+      const row = object(value, key)
+      const start = finite(row.start, 0, key + '.start', 0)
+      const count = finite(row.count, 0, key + '.count', 1)
+      const tipOpacity = finite(row.tipOpacity, 1, key + '.tipOpacity', 0)
+      if (!Number.isInteger(start) || !Number.isInteger(count) || start + count > vertexCount || tipOpacity > 1) {
+        throw new Error(key + ': неверный диапазон вершин или прозрачность')
+      }
+      return {start, count, tipOpacity, tipOffset: vector(row.tipOffset, {x: 0, y: 0, z: 0}, key + '.tipOffset')}
+    })
+    return {material: text(fur.material, label + '.material'), alphaMap: text(fur.alphaMap, label + '.alphaMap'),
+      vertexCount, rows}
+  }
+
   function validate(raw) {
     object(raw, CONFIG_URL)
     if (raw.version !== 2) throw new Error('ar-config.json: требуется "version": 2')
@@ -156,6 +178,7 @@
         roughnessFloor,
         diffuseFill: finite(item.diffuseFill, 0, label + '.diffuseFill', 0),
         markerKey,
+        fur: furDetails(item.fur, label + '.fur'),
         animation: {
           enabled: boolean(animation.enabled, true, label + '.animation.enabled'), clip,
           speed: finite(animation.speed, 1, label + '.animation.speed', 0),
@@ -393,7 +416,7 @@
     if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
     lastDebugUpdate = timestamp
     debugPanel.hidden = false
-    const lines = ['AR v11 · кадр ' + frameCount]
+    const lines = ['AR v12 · кадр ' + frameCount]
     for (const state of states.values()) {
       if (!state.tracked && !state.content) continue
       const clip = state.action?.getClip()
@@ -506,17 +529,64 @@
     return bounds
   }
 
+  function applyFurDetails(root, state, alphaMap) {
+    const {fur} = state.item
+    const meshes = []
+    root.traverse(mesh => { if (mesh.material?.name === fur.material) meshes.push(mesh) })
+    const [mesh] = meshes
+    const positions = mesh?.geometry?.getAttribute('position')
+    const colors = mesh?.geometry?.getAttribute('color')
+    if (meshes.length !== 1 || positions?.count !== fur.vertexCount || colors?.itemSize !== 4 ||
+        !mesh.material.map || !mesh.material.vertexColors) {
+      console.warn(state.item.label + ': настройки шерсти не подходят к этой модели')
+      alphaMap.dispose()
+      return
+    }
+
+    const baseMap = mesh.material.map
+    alphaMap.flipY = baseMap.flipY
+    alphaMap.wrapS = baseMap.wrapS
+    alphaMap.wrapT = baseMap.wrapT
+    alphaMap.minFilter = baseMap.minFilter
+    alphaMap.magFilter = baseMap.magFilter
+    for (const {start, count, tipOffset, tipOpacity} of fur.rows) {
+      let minY = Infinity
+      let maxY = -Infinity
+      const end = start + count
+      for (let i = start; i < end; i++) {
+        minY = Math.min(minY, positions.getY(i))
+        maxY = Math.max(maxY, positions.getY(i))
+      }
+      if (maxY === minY) continue
+      for (let i = start; i < end; i++) {
+        // Preserve the roots and stagger just the tips of the selected cards.
+        const t = (maxY - positions.getY(i)) / (maxY - minY)
+        const weight = t * t * (3 - 2 * t)
+        positions.setXYZ(i, positions.getX(i) + tipOffset.x * weight,
+          positions.getY(i) + tipOffset.y * weight, positions.getZ(i) + tipOffset.z * weight)
+        const opacity = colors.getW(i) * (1 + (tipOpacity - 1) * weight)
+        colors.setW(i, colors.normalized ? Math.round(opacity) : opacity)
+      }
+    }
+    positions.needsUpdate = true
+    colors.needsUpdate = true
+    state.furMaterial = mesh.material
+    state.furAlphaMap = alphaMap
+  }
+
   function applyMaterialSettings(root, state) {
     const {roughnessFloor, diffuseFill, markerKey} = state.item
     const keyIntensity = markerKey?.intensity ?? 0
-    if (!roughnessFloor.size && !diffuseFill && !keyIntensity) return
+    if (!roughnessFloor.size && !diffuseFill && !keyIntensity && !state.furAlphaMap) return
     const keyDirection = state.markerKeyWorld ?? new THREE.Vector3(0, 0, 1)
     root.traverse(mesh => {
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       for (const material of materials) {
         if (!material?.isMeshStandardMaterial) continue
         const floor = roughnessFloor.get(material.name) || 0
-        if (!floor && !diffuseFill && !keyIntensity) continue
+        const furAlpha = material === state.furMaterial ? state.furAlphaMap : null
+        if (!floor && !diffuseFill && !keyIntensity && !furAlpha) continue
+        if (furAlpha) material.customProgramCacheKey = () => 'marker-material-with-fur-alpha'
 
         material.onBeforeCompile = shader => {
           shader.uniforms.arRoughnessFloor = {value: floor}
@@ -544,12 +614,22 @@
             'float arKeyDiffuse = smoothstep( -0.15, 1.0, dot( normal, arViewKey ) );\n' +
             'irradiance += getAmbientLightIrradiance( vec3( arMarkerKeyIntensity * arKeyDiffuse ) );\n#endif'
           )
+          if (furAlpha) {
+            shader.uniforms.arFurAlpha = {value: furAlpha}
+            shader.fragmentShader = shader.fragmentShader.replace(
+              '#include <common>', '#include <common>\nuniform sampler2D arFurAlpha;'
+            ).replace(
+              '#include <map_fragment>',
+              '#include <map_fragment>\ndiffuseColor.a = opacity * texture2D( arFurAlpha, vUv ).r;'
+            )
+          }
         }
       }
     })
   }
 
-  function prepareModel(gltf, state) {
+  function prepareModel(gltf, state, furAlpha = null) {
+    if (furAlpha) applyFurDetails(gltf.scene, state, furAlpha)
     if (state.item.markerKey?.intensity) {
       const {x, y, z} = state.item.markerKey.direction
       state.markerKeyLocal = new THREE.Vector3(x, y, z).normalize()
@@ -775,7 +855,7 @@
   let draco = null
   function requestModel(state) {
     if (state.promise) return state.promise
-    state.promise = new Promise((resolve, reject) => {
+    const model = new Promise((resolve, reject) => {
       const loader = new THREE.GLTFLoader()
       if (THREE.DRACOLoader) {
         if (!draco) {
@@ -785,8 +865,15 @@
         loader.setDRACOLoader(draco)
       }
       loader.load(state.item.modelUrl, resolve, undefined, reject)
-    }).then(gltf => {
-      state.content = prepareModel(gltf, state)
+    })
+    const furAlpha = state.item.fur
+      ? new THREE.TextureLoader().loadAsync(state.item.fur.alphaMap).catch(error => {
+        console.warn(state.item.label + ': не удалось загрузить карту прозрачности шерсти', error)
+        return null
+      })
+      : null
+    state.promise = Promise.all([model, furAlpha]).then(([gltf, alphaMap]) => {
+      state.content = prepareModel(gltf, state, alphaMap)
       if (state.anchor) state.anchor.add(state.content)
       applyPose(state)
     }).catch(error => {
