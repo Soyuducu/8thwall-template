@@ -1,53 +1,97 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Image Tracking</title>
+  <meta name="theme-color" content="#294851">
+  <title>TrollMuseum AR</title>
   <style>
     * { box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
-    #canvas { position: fixed; inset: 0; display: block; width: 100vw; height: 100dvh; touch-action: manipulation; }
-    #loading { position: fixed; top: calc(env(safe-area-inset-top) + 16px); left: 50%;
-      transform: translateX(-50%); max-width: calc(100% - 32px); z-index: 2;
-      display: flex; align-items: center; gap: 10px; padding: 12px 16px;
-      color: white; background: rgba(0,0,0,.72); border-radius: 12px;
-      font: 14px/1.45 system-ui, sans-serif; overflow-wrap: anywhere; }
-    #loading[hidden] { display: none; }
-    #spinner { display: none; flex: 0 0 20px; width: 20px; height: 20px;
-      border: 2px solid rgba(255,255,255,.25); border-top-color: white;
-      border-radius: 50%; animation: spin .8s linear infinite; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #294851; }
+    [hidden] { display: none !important; }
+    #canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: manipulation; }
+    #splash {
+      position: fixed; inset: 0; z-index: 2; display: grid; place-items: center;
+      background: #294851; color: #e2ecec; text-align: center;
+    }
+    .brand-placeholder { font: 600 clamp(1.6rem, 6vw, 2.5rem)/1.1 Georgia, serif; }
+    .brand-placeholder small {
+      display: block; margin-top: 8px; font: 600 .7rem/1.2 system-ui, sans-serif;
+      letter-spacing: .24em; text-transform: uppercase;
+    }
+    #start-ar {
+      position: absolute; bottom: calc(env(safe-area-inset-bottom) + clamp(22px, 5dvh, 54px));
+      width: min(62%, 280px); min-height: 52px; padding: 12px 20px; border: 0;
+      border-radius: 999px; background: #0054a8; color: #fff;
+      font: 650 18px/1.2 system-ui, sans-serif; cursor: pointer;
+    }
+    #loading, .scan-message {
+      position: fixed; top: calc(env(safe-area-inset-top) + 16px); left: 50%;
+      transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px);
+      padding: 10px 16px; border-radius: 12px; color: #fff; background: #101539;
+      text-align: center; font: 600 14px/1.4 system-ui, sans-serif; overflow-wrap: anywhere;
+    }
+    #loading { z-index: 4; display: flex; align-items: center; gap: 10px; }
+    #splash:not([hidden]) ~ #loading {
+      top: auto; bottom: calc(env(safe-area-inset-bottom) + clamp(22px, 5dvh, 54px));
+    }
+    #loading.error { background: #681b22; }
+    #spinner {
+      display: none; flex: 0 0 20px; width: 20px; height: 20px;
+      border: 2px solid #ffffff50; border-top-color: #fff; border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
     #loading.busy #spinner { display: block; }
-    #loading.error { background: rgba(110,20,20,.95); }
-    #start-ar { position: fixed; z-index: 3; inset: 50% auto auto 50%;
-      transform: translate(-50%, -50%); min-height: 48px; white-space: nowrap;
-      padding: 12px 24px; border: 0; border-radius: 12px; background: #fff;
-      color: #151515; font: 600 16px system-ui, sans-serif; cursor: pointer; }
-    #resume-audio { position: fixed; z-index: 3; left: 50%;
+    #scanner { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+    .scan-graphic {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 124px; height: 88px; border: 2px solid #ffffffb3; border-radius: 9px;
+      background: #12203b33; filter: drop-shadow(0 2px 4px #0009);
+    }
+    .scan-graphic::after {
+      content: ""; position: absolute; top: -7px; left: calc(50% - 28px);
+      width: 54px; height: 98px; border: 2px solid #ffffffe0; border-radius: 10px;
+      background: #ffffff45; animation: scan 2.4s ease-in-out infinite alternate;
+    }
+    #resume-audio {
+      position: fixed; z-index: 3; left: 50%;
       bottom: calc(env(safe-area-inset-bottom) + 16px); transform: translateX(-50%);
       min-height: 48px; padding: 12px 18px; border: 0; border-radius: 12px;
       background: #fff; color: #151515; font: 600 16px system-ui, sans-serif;
-      white-space: nowrap; cursor: pointer; }
-    #playback-debug { position: fixed; z-index: 4; left: 8px; top: 72px;
-      max-width: calc(100% - 16px); margin: 0; padding: 8px 10px;
-      background: #000c; color: #fff; border-radius: 8px; pointer-events: none;
-      white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 monospace; }
+      white-space: nowrap; cursor: pointer;
+    }
+    #playback-debug {
+      position: fixed; z-index: 5; left: 8px; top: calc(env(safe-area-inset-top) + 72px);
+      max-width: calc(100% - 16px); margin: 0; padding: 8px 10px; background: #000c;
+      color: #fff; border-radius: 8px; pointer-events: none; white-space: pre-wrap;
+      overflow-wrap: anywhere; font: 12px/1.4 monospace;
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes scan { from { transform: translateX(-25px); } to { transform: translateX(25px); } }
+    @media (prefers-reduced-motion: reduce) {
+      #spinner, .scan-graphic::after { animation: none; }
+    }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <pre id="playback-debug" hidden></pre>
-  <button id="start-ar" type="button" hidden>Начать AR</button>
-  <button id="resume-audio" type="button" hidden>Включить звук</button>
-  <div id="loading" class="busy" role="status" aria-live="polite">
-    <span id="spinner" aria-hidden="true"></span><span id="status">Загрузка движка…</span>
+  <section id="splash" aria-label="TrollMuseum AR">
+    <div class="brand-placeholder">TrollMuseum<small>Bergen</small></div>
+    <button id="start-ar" type="button" hidden>Start AR</button>
+  </section>
+  <div id="scanner" hidden>
+    <div class="scan-message" role="status">Point the camera at the image</div>
+    <div class="scan-graphic" aria-hidden="true"></div>
   </div>
-  <!-- Движок сохраняется из исходного TakashiYoshinaga/8thwall-template. -->
+  <pre id="playback-debug" hidden></pre>
+  <button id="resume-audio" type="button" hidden>Enable audio</button>
+  <div id="loading" class="busy" role="status" aria-live="polite">
+    <span id="spinner" aria-hidden="true"></span><span id="status">Loading AR…</span>
+  </div>
   <script id="xr-engine" src="external/xr/xr.js" async data-preload-chunks="slam"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <script src="js/app.js?v=12"></script>
+  <script src="js/app.js?v=13"></script>
 </body>
 </html>

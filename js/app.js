@@ -1,7 +1,9 @@
-// Содержимое, анимации и свет настраиваются в ar-config.json рядом с index.html.
+// Configure content, animation and lighting in ar-config.json next to index.html.
 ;(function () {
   const CONFIG_URL = 'ar-config.json'
   const canvas = document.getElementById('canvas')
+  const splash = document.getElementById('splash')
+  const scanner = document.getElementById('scanner')
   const overlay = document.getElementById('loading')
   const status = document.getElementById('status')
   const startButton = document.getElementById('start-ar')
@@ -14,6 +16,7 @@
   let tapStart = null
   const tapMeshes = new WeakMap()
   let started = false
+  let cameraReady = false
   let animationFrame = null
   let previousFrameTime = null
   let frameCount = 0
@@ -30,28 +33,30 @@
   function fail(error) {
     console.error(error)
     stopPlayback()
+    startButton.hidden = true
+    scanner.hidden = true
     if (resumeButton) resumeButton.hidden = true
-    message('Ошибка: ' + (error?.message || String(error)), false, true)
+    message('Error: ' + (error?.message || String(error)), false, true)
     fatal = true
   }
 
   function finite(value, fallback, label, min = -Infinity) {
     const result = value === undefined ? fallback : value
     if (typeof result !== 'number' || !Number.isFinite(result) || result < min) {
-      throw new Error(label + ': требуется число' + (min > -Infinity ? ' не меньше ' + min : ''))
+      throw new Error(label + ': expected a number' + (min > -Infinity ? ' of at least ' + min : ''))
     }
     return result
   }
 
   function boolean(value, fallback, label) {
     if (value === undefined) return fallback
-    if (typeof value !== 'boolean') throw new Error(label + ': требуется true или false')
+    if (typeof value !== 'boolean') throw new Error(label + ': expected true or false')
     return value
   }
 
   function vector(value, fallback, label) {
     if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) {
-      throw new Error(label + ': требуется объект с x, y, z')
+      throw new Error(label + ': expected an object with x, y and z')
     }
     return Object.fromEntries(['x', 'y', 'z'].map(axis =>
       [axis, finite(value?.[axis], fallback[axis], label + '.' + axis)]))
@@ -60,19 +65,19 @@
   function color(value, fallback, label) {
     const result = value === undefined ? fallback : value
     if (typeof result !== 'string' || !/^#[\da-f]{6}$/i.test(result)) {
-      throw new Error(label + ': используйте цвет вида #ffffff')
+      throw new Error(label + ': use a color in #ffffff format')
     }
     return result
   }
 
   function text(value, label) {
-    if (typeof value !== 'string' || !value.trim()) throw new Error(label + ': требуется непустая строка')
+    if (typeof value !== 'string' || !value.trim()) throw new Error(label + ': expected a non-empty string')
     return value.trim()
   }
 
   function object(value, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error(label + ': требуется объект')
+      throw new Error(label + ': expected an object')
     }
     return value
   }
@@ -81,25 +86,25 @@
     if (value == null) return null
     const audio = object(value, label)
     const volume = finite(audio.volume, 1, label + '.volume', 0)
-    if (volume > 1) throw new Error(label + '.volume: максимум 1')
+    if (volume > 1) throw new Error(label + '.volume: maximum is 1')
     return {url: text(audio.url, label + '.url'), volume}
   }
 
   function animationClip(value, label) {
     if ((typeof value === 'string' && value.length) || (Number.isInteger(value) && value >= 0)) return value
-    throw new Error(label + ': требуется номер с нуля или имя анимации')
+    throw new Error(label + ': expected a zero-based index or animation name')
   }
 
   function animationSequence(values, label) {
     if (values === undefined) return null
-    if (!Array.isArray(values) || !values.length) throw new Error(label + ': требуется непустой список')
+    if (!Array.isArray(values) || !values.length) throw new Error(label + ': expected a non-empty list')
     return values.map((value, index) => {
       const key = label + '[' + index + ']'
       const step = object(value, key)
       const speed = finite(step.speed, 1, key + '.speed', 0)
       const exitTime = finite(step.exitTime, 1, key + '.exitTime', 0)
-      if (!speed) throw new Error(key + '.speed: требуется число больше нуля')
-      if (!exitTime || exitTime > 1) throw new Error(key + '.exitTime: требуется число больше 0, до 1 включительно')
+      if (!speed) throw new Error(key + '.speed: expected a number greater than zero')
+      if (!exitTime || exitTime > 1) throw new Error(key + '.exitTime: expected a number greater than 0 and at most 1')
       return {
         clip: animationClip(step.clip, key + '.clip'), speed, exitTime,
         blend: finite(step.blend, 0, key + '.blend', 0),
@@ -114,7 +119,7 @@
     const fur = object(raw, label)
     const vertexCount = finite(fur.vertexCount, 0, label + '.vertexCount', 1)
     if (!Number.isInteger(vertexCount) || !Array.isArray(fur.rows)) {
-      throw new Error(label + ': требуется число вершин и список прядей')
+      throw new Error(label + ': expected an integer vertex count and a list of fur rows')
     }
     const rows = fur.rows.map((value, index) => {
       const key = label + '.rows[' + index + ']'
@@ -123,7 +128,7 @@
       const count = finite(row.count, 0, key + '.count', 1)
       const tipOpacity = finite(row.tipOpacity, 1, key + '.tipOpacity', 0)
       if (!Number.isInteger(start) || !Number.isInteger(count) || start + count > vertexCount || tipOpacity > 1) {
-        throw new Error(key + ': неверный диапазон вершин или прозрачность')
+        throw new Error(key + ': invalid vertex range or opacity')
       }
       return {start, count, tipOpacity, tipOffset: vector(row.tipOffset, {x: 0, y: 0, z: 0}, key + '.tipOffset')}
     })
@@ -133,10 +138,10 @@
 
   function validate(raw) {
     object(raw, CONFIG_URL)
-    if (raw.version !== 2) throw new Error('ar-config.json: требуется "version": 2')
+    if (raw.version !== 2) throw new Error('ar-config.json: expected "version": 2')
     const mode = raw.displayMode ?? 'multiple'
-    if (!['multiple', 'single'].includes(mode)) throw new Error('displayMode: используйте multiple или single')
-    if (!Array.isArray(raw.items)) throw new Error('items: требуется список моделей')
+    if (!['multiple', 'single'].includes(mode)) throw new Error('displayMode: use multiple or single')
+    if (!Array.isArray(raw.items)) throw new Error('items: expected a list of models')
     const items = raw.items.flatMap((value, index) => {
       const label = 'items[' + index + ']'
       const item = object(value, label)
@@ -148,16 +153,16 @@
       const attackClip = animation.attackOnTap
       const tapAttackIndex = attackClip === undefined ? -1 : sequence?.findIndex(step => step.clip === attackClip)
       if (attackClip !== undefined && !(tapAttackIndex >= 0)) {
-        throw new Error(animationKey + '.attackOnTap: требуется клип из sequence')
+        throw new Error(animationKey + '.attackOnTap: expected a clip from sequence')
       }
       const size = finite(item.size, 0.65, label + '.size', 0)
-      if (!size) throw new Error(label + '.size должен быть больше нуля')
+      if (!size) throw new Error(label + '.size must be greater than zero')
       const roughnessFloor = new Map(Object.entries(
         object(item.roughnessFloor ?? {}, label + '.roughnessFloor')
       ).map(([name, value]) => {
         const key = label + '.roughnessFloor.' + name
         const floor = finite(value, 0, key, 0)
-        if (floor > 1) throw new Error(key + ': максимум 1')
+        if (floor > 1) throw new Error(key + ': maximum is 1')
         return [name, floor]
       }))
       const keyLabel = label + '.markerKey'
@@ -167,10 +172,10 @@
         direction: vector(key.direction, {x: 0, y: -0.75, z: 1}, keyLabel + '.direction'),
       }
       if (markerKey?.intensity && !Object.values(markerKey.direction).some(Boolean)) {
-        throw new Error(keyLabel + '.direction: требуется ненулевое направление')
+        throw new Error(keyLabel + '.direction: expected a nonzero direction')
       }
       return [{
-        label: item.label === undefined ? 'Модель ' + (index + 1) : text(item.label, label + '.label'),
+        label: item.label === undefined ? 'Model ' + (index + 1) : text(item.label, label + '.label'),
         targetJson: text(item.targetJson, label + '.targetJson'),
         modelUrl: text(item.modelUrl, label + '.modelUrl'), size,
         rotationDegrees: vector(item.rotationDegrees, {x: 90, y: 0, z: 0}, label + '.rotationDegrees'),
@@ -189,9 +194,9 @@
         },
       }]
     })
-    if (!items.length) throw new Error('В items нет включённых моделей (enabled: true)')
+    if (!items.length) throw new Error('No models are enabled in items (enabled: true)')
     const paths = items.map(item => new URL(item.targetJson, document.baseURI).href)
-    if (new Set(paths).size !== paths.length) throw new Error('В items повторяется путь targetJson')
+    if (new Set(paths).size !== paths.length) throw new Error('Duplicate targetJson path in items')
 
     const lights = object(raw.lighting ?? {}, 'lighting')
     const ambient = object(lights.ambient ?? {}, 'lighting.ambient')
@@ -199,7 +204,7 @@
     const directional = lights.directional ?? [
       {color: '#ffffff', intensity: 0.8, position: {x: 1, y: 2, z: 3}},
     ]
-    if (!Array.isArray(directional)) throw new Error('lighting.directional: требуется список источников')
+    if (!Array.isArray(directional)) throw new Error('lighting.directional: expected a list of lights')
     return {
       displayMode: mode,
       preloadModels: boolean(raw.preloadModels, false, 'preloadModels'), items,
@@ -232,16 +237,16 @@
     const response = await fetch(url, {cache: 'no-store'})
     if (!response.ok) throw new Error(label + ': HTTP ' + response.status + ' — ' + url.pathname)
     try { return {data: await response.json(), url} }
-    catch { throw new Error(label + ': некорректный JSON — ' + url.pathname) }
+    catch { throw new Error(label + ': invalid JSON — ' + url.pathname) }
   }
 
   async function addTarget(item) {
     const {data, url} = await json(item.targetJson, item.label)
     const name = text(data.name, item.targetJson + ': name')
-    if (data.type !== 'PLANAR') throw new Error(item.label + ': этот шаблон поддерживает плоские маркеры (flat)')
-    if (states.has(name)) throw new Error('Повторяется имя маркера "' + name + '". Сгенерируйте цели с разными именами')
-    if (typeof data.imagePath !== 'string' || !data.imagePath) throw new Error(item.targetJson + ': отсутствует imagePath')
-    if (!data.properties || typeof data.properties !== 'object') throw new Error(item.targetJson + ': отсутствует properties')
+    if (data.type !== 'PLANAR') throw new Error(item.label + ': this template expects a planar image target')
+    if (states.has(name)) throw new Error('Duplicate image target name "' + name + '". Use a unique name for each target')
+    if (typeof data.imagePath !== 'string' || !data.imagePath) throw new Error(item.targetJson + ': missing imagePath')
+    if (!data.properties || typeof data.properties !== 'object') throw new Error(item.targetJson + ': missing properties')
     data.imagePath = data.resources?.luminanceImage
       ? new URL(data.resources.luminanceImage, url).href
       : new URL(data.imagePath, document.baseURI).href
@@ -269,6 +274,12 @@
     return new Promise(resolve => {
       startButton.addEventListener('click', () => {
         startButton.hidden = true
+        // Fullscreen must be requested while the browser still recognizes this tap.
+        if (document.fullscreenEnabled && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen({navigationUI: 'hide'}).catch(error => {
+            console.info('Fullscreen is unavailable:', error)
+          })
+        }
         resolve()
       }, {once: true})
     })
@@ -283,8 +294,8 @@
       if (!sound.track || !element.error) return
       stopSound(state)
       sound.status = 'error'
-      sound.error = element.error.message || 'Код ' + element.error.code
-      console.warn('Не удалось загрузить звук:', sound.track.url, element.error)
+      sound.error = element.error.message || 'Code ' + element.error.code
+      console.warn('Could not load audio:', sound.track.url, element.error)
       refreshAudioButton()
     })
     element.addEventListener('ended', () => {
@@ -293,7 +304,7 @@
     element.addEventListener('pause', () => {
       if (!element.paused || element.ended || sound.status !== 'playing') return
       sound.status = 'blocked'
-      sound.error = 'Браузер остановил воспроизведение'
+      sound.error = 'The browser paused audio playback'
       refreshAudioButton()
     })
     setSoundTrack(state, audio)
@@ -363,7 +374,7 @@
       sound.needsStart = false
       sound.status = ['NotAllowedError', 'TimeoutError'].includes(error.name) ? 'blocked' : 'error'
       sound.error = error.name + (error.message ? ': ' + error.message : '')
-      console.warn('Не удалось запустить звук:', state.item.label, error)
+      console.warn('Could not start audio playback:', state.item.label, error)
       refreshAudioButton()
     }
 
@@ -371,7 +382,7 @@
       element.playbackRate = sequence ? 1 : speed
       element.currentTime = offset
       request.timeout = setTimeout(() => failure({
-        name: 'TimeoutError', message: 'Запуск звука не подтверждён',
+        name: 'TimeoutError', message: 'Audio playback did not start',
       }), 2500)
       // A manual retry calls play() directly from the trusted click handler.
       Promise.resolve(element.play()).then(() => {
@@ -416,19 +427,19 @@
     if (!debug || !debugPanel || timestamp - lastDebugUpdate < 250) return
     lastDebugUpdate = timestamp
     debugPanel.hidden = false
-    const lines = ['AR v12 · кадр ' + frameCount]
+    const lines = ['AR v13 · frame ' + frameCount]
     for (const state of states.values()) {
       if (!state.tracked && !state.content) continue
       const clip = state.action?.getClip()
-      lines.push(state.name + (state.anchor?.visible ? ' · виден' : ' · вне кадра') +
-        (activeAttack === state ? ' · атака по тапу' : ''))
+      lines.push(state.name + (state.anchor?.visible ? ' · visible' : ' · out of view') +
+        (activeAttack === state ? ' · tap attack' : ''))
       const step = state.sequence
         ? (state.sequence.index + 1) + '/' + state.sequence.steps.length + ' · ' : ''
       lines.push(clip ? step + clip.name + ': ' + state.action.time.toFixed(2) + ' / ' +
-        clip.duration.toFixed(2) + ' с' : state.error || (state.content ? 'Без анимации' : 'Загрузка модели'))
+        clip.duration.toFixed(2) + ' s' : state.error || (state.content ? 'No animation' : 'Loading model'))
       if (state.sound) {
         const {element, track, status, error} = state.sound
-        lines.push('Звук: ' + (track ? track.url + ' · ' : '') + status + ' · ' + element.currentTime.toFixed(2) + ' с' +
+        lines.push('Audio: ' + (track ? track.url + ' · ' : '') + status + ' · ' + element.currentTime.toFixed(2) + ' s' +
           (error ? ' · ' + error : ''))
       }
     }
@@ -468,7 +479,9 @@
   }
 
   function refresh() {
-    if (!scene || fatal) return
+    if (!scene || !cameraReady || fatal) return
+    splash.hidden = true
+    scanner.hidden = [...states.values()].some(state => state.tracked)
     const active = [...states.values()].filter(eligible)
     for (const state of states.values()) {
       if (!state.anchor) continue
@@ -477,12 +490,12 @@
     }
     refreshAudioButton()
     const pending = active.filter(state => state.promise && !state.content && !state.error)
-    if (pending.length) message('Загрузка: ' + pending.map(s => s.item.label).join(', ') + '…', true)
+    if (pending.length) message('Loading: ' + pending.map(s => s.item.label).join(', ') + '…', true)
     else if (active.some(state => state.content)) message('')
     else if (active.some(state => state.error)) {
       const state = active.find(s => s.error)
-      message(state.item.label + ': ' + state.error + '. Исправьте файл и обновите страницу', false, true)
-    } else message('Наведите камеру на маркер')
+      message(state.item.label + ': ' + state.error + '. Fix the file and reload the page', false, true)
+    } else message('')
   }
 
   function applyPose(state) {
@@ -538,7 +551,7 @@
     const colors = mesh?.geometry?.getAttribute('color')
     if (meshes.length !== 1 || positions?.count !== fur.vertexCount || colors?.itemSize !== 4 ||
         !mesh.material.map || !mesh.material.vertexColors) {
-      console.warn(state.item.label + ': настройки шерсти не подходят к этой модели')
+      console.warn(state.item.label + ': fur settings do not match this model')
       alphaMap.dispose()
       return
     }
@@ -641,10 +654,10 @@
     orientation.rotation.set(...['x', 'y', 'z'].map(axis => THREE.MathUtils.degToRad(r[axis])))
     orientation.add(gltf.scene)
     const bounds = modelBounds(orientation)
-    if (bounds.isEmpty()) throw new Error('В модели нет видимой геометрии')
+    if (bounds.isEmpty()) throw new Error('The model has no visible geometry')
     const size = bounds.getSize(new THREE.Vector3())
     const longest = Math.max(size.x, size.y, size.z)
-    if (!Number.isFinite(longest) || longest <= 0) throw new Error('Некорректный размер модели')
+    if (!Number.isFinite(longest) || longest <= 0) throw new Error('Invalid model size')
     const center = bounds.getCenter(new THREE.Vector3())
     const fitted = new THREE.Group()
     fitted.scale.setScalar(1 / longest)
@@ -668,7 +681,7 @@
       const mixer = state.mixer = new THREE.AnimationMixer(gltf.scene)
       const steps = settings.sequence.map(step => {
         const clip = findClip(clips, step.clip)
-        if (!(clip?.duration > 0)) throw new Error('Не найдена анимация «' + step.clip + '»')
+        if (!(clip?.duration > 0)) throw new Error('Animation not found: “' + step.clip + '”')
         // The same imported clip can represent distinct Unity states with different speeds.
         const stateClip = new THREE.AnimationClip(clip.name, clip.duration, clip.tracks, clip.blendMode)
         const action = mixer.clipAction(stateClip).setLoop(THREE.LoopOnce, 1)
@@ -683,7 +696,7 @@
     if (!clips.length) return
     const clip = findClip(clips, settings.clip)
     if (!clip) {
-      console.warn(state.item.label + ': анимация "' + settings.clip + '" не найдена; модель будет статичной')
+      console.warn(state.item.label + ': animation "' + settings.clip + '" was not found. The model will remain static')
       return
     }
     state.mixer = new THREE.AnimationMixer(gltf.scene)
@@ -868,7 +881,7 @@
     })
     const furAlpha = state.item.fur
       ? new THREE.TextureLoader().loadAsync(state.item.fur.alphaMap).catch(error => {
-        console.warn(state.item.label + ': не удалось загрузить карту прозрачности шерсти', error)
+        console.warn(state.item.label + ': could not load the fur opacity map', error)
         return null
       })
       : null
@@ -878,7 +891,7 @@
       applyPose(state)
     }).catch(error => {
       console.error(state.item.label, error)
-      state.error = 'Не удалось загрузить ' + state.item.modelUrl + ' (' + (error?.message || String(error)) + ')'
+      state.error = 'Could not load ' + state.item.modelUrl + ' (' + (error?.message || String(error)) + ')'
     }).finally(refresh)
     refresh()
     return state.promise
@@ -887,7 +900,7 @@
   function found(detail) {
     const state = states.get(detail.name)
     if (!state || fatal) return
-    // Копируем числа: движок может переиспользовать объекты detail между кадрами.
+    // Copy the values because the engine may reuse the event detail objects.
     state.pose = {
       position: {x: detail.position.x, y: detail.position.y, z: detail.position.z},
       rotation: {x: detail.rotation.x, y: detail.rotation.y, z: detail.rotation.z, w: detail.rotation.w},
@@ -945,12 +958,12 @@
     started = true
     try {
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Для камеры откройте страницу по HTTPS или через localhost')
+        throw new Error('Open the page over HTTPS or on localhost to use the camera')
       }
-      if (!window.THREE?.GLTFLoader) throw new Error('Не загрузились Three.js/GLTFLoader. Проверьте интернет и index.html')
-      message('Загрузка настроек…', true)
-      config = validate((await json(CONFIG_URL, 'Настройки')).data)
-      message('Загрузка маркеров…', true)
+      if (!window.THREE?.GLTFLoader) throw new Error('Could not load Three.js or GLTFLoader. Check your connection and index.html')
+      message('Loading settings…', true)
+      config = validate((await json(CONFIG_URL, 'Settings')).data)
+      message('Loading image targets…', true)
       for (const item of config.items) await addTarget(item)
       if (typeof Audio === 'function') {
         for (const state of states.values()) {
@@ -958,10 +971,11 @@
           const firstTrack = sequence ? sequence.find(step => step.audio?.volume > 0)?.audio : audio
           if (enabled && speed > 0 && firstTrack?.volume > 0) loadSound(state, firstTrack)
         }
-        if (startButton && [...states.values()].some(state => state.sound)) await startButtonPress()
       }
+      await startButtonPress()
+      if (fatal) return
       if (config.preloadModels) {
-        message('Загрузка моделей…', true)
+        message('Loading models…', true)
         await Promise.all([...states.values()].map(requestModel))
         if ([...states.values()].every(s => s.error)) {
           throw new Error([...states.values()].map(s => s.item.label + ': ' + s.error).join('; '))
@@ -1005,13 +1019,21 @@
             refresh()
             if (animationFrame === null) animationFrame = window.requestAnimationFrame(animate)
           },
-          onDetach: stopPlayback,
+          onDetach() {
+            cameraReady = false
+            scanner.hidden = true
+            stopPlayback()
+          },
           onCameraStatusChange({status: cameraStatus, reason}) {
-            if (cameraStatus === 'requesting') message('Разрешите доступ к камере…', true)
-            if (cameraStatus === 'hasVideo') message('Подготовка отслеживания…', true)
+            if (cameraStatus === 'requesting') message('Allow camera access to continue…', true)
+            if (cameraStatus === 'hasVideo' || cameraStatus === 'hasSessionWebXr') {
+              cameraReady = true
+              message('Preparing image tracking…', true)
+              refresh()
+            }
             if (cameraStatus === 'failed') fail(new Error(reason === 'DENY_CAMERA'
-              ? 'Доступ к камере запрещён. Разрешите его в настройках сайта и обновите страницу'
-              : 'Не удалось открыть камеру: ' + (reason || 'UNKNOWN')))
+              ? 'Camera access is blocked. Allow it in your browser settings and reload'
+              : 'Could not open the camera: ' + (reason || 'UNKNOWN')))
           },
           onException: fail,
           listeners: [
@@ -1022,12 +1044,13 @@
           ],
         },
       ])
-      message('Запуск камеры…', true)
+      message('Starting camera…', true)
       resize()
       await XR8.run({canvas, allowedDevices: XR8.XrConfig.device().ANY})
     } catch (error) { fail(error) }
   }
 
+  document.addEventListener('fullscreenchange', resize)
   document.addEventListener('visibilitychange', () => {
     previousFrameTime = null
     if (document.hidden) {
@@ -1043,7 +1066,7 @@
     }
     refreshAudioButton()
   })
-  document.getElementById('xr-engine')?.addEventListener('error', () => fail(new Error('Не загрузился external/xr/xr.js')))
+  document.getElementById('xr-engine')?.addEventListener('error', () => fail(new Error('Could not load the AR engine')))
   if (window.XR8) start()
   else window.addEventListener('xrloaded', start, {once: true})
 })()

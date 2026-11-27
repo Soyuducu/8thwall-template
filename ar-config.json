@@ -21,7 +21,7 @@
   "items": [
     {
       "enabled": true,
-      "label": "Первая модель",
+      "label": "First model",
       "targetJson": "image-targets/custom.json",
       "modelUrl": "assets/model.glb",
       "size": 0.65,
@@ -37,7 +37,7 @@
     },
     {
       "enabled": true,
-      "label": "Вторая модель",
+      "label": "Jotun",
       "targetJson": "image-targets/marker2.json",
       "modelUrl": "assets/model2_test.glb",
       "fur": {
@@ -73,8 +73,8 @@
         "Troll_fur_01Mat": 0.5
       },
       "size": 1.2,
-      "rotationDegrees": {"x": 90, "y": 0, "z": 0},
-      "offset": {"x": 0.0375, "y": -0.0915, "z": 0.0075},
+      "rotationDegrees": {"x": 90, "y": -90, "z": 0},
+      "offset": {"x": -0.0915, "y": -0.0375, "z": 0.0075},
       "animation": {
         "enabled": true,
         "speed": 1,
@@ -104,7 +104,7 @@
     },
     {
       "enabled": false,
-      "label": "Третья модель",
+      "label": "Third model",
       "targetJson": "image-targets/marker3.json",
       "modelUrl": "assets/model3.glb",
       "size": 0.65,
