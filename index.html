@@ -54,7 +54,6 @@
       filter: drop-shadow(0 2px 4px #0009);
     }
     .scan-phone { animation: scan 2.4s ease-in-out infinite alternate; }
-    .scan-line { animation: sweep 1.6s ease-in-out infinite alternate; }
     #resume-audio {
       position: fixed; z-index: 3; left: 50%;
       bottom: calc(env(safe-area-inset-bottom) + 16px); transform: translateX(-50%);
@@ -70,9 +69,8 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes scan { from { transform: translateX(-25px); } to { transform: translateX(25px); } }
-    @keyframes sweep { from { transform: translateY(-14px); } to { transform: translateY(14px); } }
     @media (prefers-reduced-motion: reduce) {
-      #spinner, .scan-phone, .scan-line { animation: none; }
+      #spinner, .scan-phone { animation: none; }
     }
   </style>
 </head>
@@ -123,8 +121,6 @@
         <rect x="37" y="7" width="54" height="98" rx="10" fill="#162d41" stroke-opacity=".95"/>
         <rect x="43" y="23" width="42" height="65" rx="4" fill="#ffffff12" stroke-opacity=".4"/>
         <path d="M60 15h8m-9 82h10" stroke-opacity=".65"/>
-        <path d="M51 44v-8h8m10 0h8v8m0 24v8h-8m-10 0h-8v-8" stroke="#d8f7ff"/>
-        <path class="scan-line" d="M54 56h20" stroke="#a9efff"/>
       </g>
     </svg>
   </div>
