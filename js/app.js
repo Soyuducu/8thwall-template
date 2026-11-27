@@ -274,12 +274,6 @@
     return new Promise(resolve => {
       startButton.addEventListener('click', () => {
         startButton.hidden = true
-        // Fullscreen must be requested while the browser still recognizes this tap.
-        if (document.fullscreenEnabled && document.documentElement.requestFullscreen) {
-          document.documentElement.requestFullscreen({navigationUI: 'hide'}).catch(error => {
-            console.info('Fullscreen is unavailable:', error)
-          })
-        }
         resolve()
       }, {once: true})
     })
@@ -949,8 +943,9 @@
   }
 
   function resize() {
-    if (canvas.width !== innerWidth) canvas.width = innerWidth
-    if (canvas.height !== innerHeight) canvas.height = innerHeight
+    const {clientWidth, clientHeight} = canvas
+    if (canvas.width !== clientWidth) canvas.width = clientWidth
+    if (canvas.height !== clientHeight) canvas.height = clientHeight
   }
 
   async function start() {
@@ -1051,6 +1046,7 @@
   }
 
   document.addEventListener('fullscreenchange', resize)
+  document.addEventListener('webkitfullscreenchange', resize)
   document.addEventListener('visibilitychange', () => {
     previousFrameTime = null
     if (document.hidden) {
